@@ -18,7 +18,7 @@ class Patient(models.Model):
     maritalStatus = models.CharField(max_length=20, blank=True)
     phone = models.CharField(max_length=15)
     altPhone = models.CharField(max_length=15, blank=True)
-    email = models.EmailField(blank=True)
+    email = models.EmailField(blank=True, null=True)
     address = models.TextField()
     nationalId = models.CharField(max_length=50)
     remarks = models.TextField(blank=True)
@@ -36,23 +36,33 @@ class Patient(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
-        is_new = self.pk is None
-        
-        # Generate UHID BEFORE saving to avoid double-saving
-        if is_new and not self.uhid:
-            branch_prefix = "SHL" if self.branch_location == 'LNM' else "SHR"
+        if not self.uhid:
+            # 1. Determine the prefix based on the branch
+            prefix = "SHL" if self.branch_location == "LNM" else "SHR"
             
-            # Count how many patients already exist IN THIS BRANCH
-            branch_count = Patient.objects.filter(branch_location=self.branch_location).count()
-            new_sequence = branch_count + 1
+            # 2. Safely find the last patient registered in this specific branch
+            last_patient = Patient.objects.filter(branch_location=self.branch_location).order_by('id').last()
             
-            # Formats to SHL-000-1, SHR-000-1, etc.
-            self.uhid = f"{branch_prefix}-000-{new_sequence}"
+            if last_patient and last_patient.uhid:
+                try:
+                    # Extract the numeric part (e.g., "0000001" from "SHL-0000001")
+                    last_number_str = last_patient.uhid.split("-")[1]
+                    last_number = int(last_number_str)
+                    new_number = last_number + 1
+                except (IndexError, ValueError):
+                    # Fallback if the previous UHID format was weird
+                    new_number = 1
+            else:
+                # If this is the very first patient for this branch
+                new_number = 1
+            
+            # 3. Format the new number with 7 digits (e.g., 1 becomes "0000001")
+            formatted_number = str(new_number).zfill(7)
+            
+            # 4. Construct the final UHID
+            self.uhid = f"{prefix}-{formatted_number}"
             
         super().save(*args, **kwargs)
-
-    def __str__(self):
-        return f"{self.uhid} - {self.patientName}"
 
 class Admission(models.Model):
     ADMISSION_TYPE_CHOICES = (

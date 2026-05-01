@@ -25,9 +25,45 @@ class ServiceMasterSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class MedicalHistorySerializer(serializers.ModelSerializer):
+    bp_formatted = serializers.SerializerMethodField()
+    spo2_formatted = serializers.SerializerMethodField()
+    pr_formatted = serializers.SerializerMethodField()
+    temp_formatted = serializers.SerializerMethodField()
+    chest_formatted = serializers.SerializerMethodField()
+    cvs_formatted = serializers.SerializerMethodField()
+    cns_formatted = serializers.SerializerMethodField()
+    pa_formatted = serializers.SerializerMethodField()
+
     class Meta:
         model = MedicalHistory
         fields = '__all__'
+
+    def get_bp_formatted(self, obj):
+        return f"{obj.bp} MMHG" if getattr(obj, 'bp', None) else ""
+
+    def get_spo2_formatted(self, obj):
+        return f"{obj.spo2} % on RA" if getattr(obj, 'spo2', None) else ""
+
+    def get_pr_formatted(self, obj):
+        # Database stores it as 'pulse', but frontend displays as PR
+        return f"{obj.pulse} /MINT" if getattr(obj, 'pulse', None) else ""
+
+    def get_temp_formatted(self, obj):
+        return f"{obj.temp} °F" if getattr(obj, 'temp', None) else ""
+
+    def get_chest_formatted(self, obj):
+        return f"{obj.chest}" if getattr(obj, 'chest', None) else ""
+
+    def get_cvs_formatted(self, obj):
+        return f"{obj.cvs}" if getattr(obj, 'cvs', None) else ""
+
+    def get_cns_formatted(self, obj):
+        return f"{obj.cns}" if getattr(obj, 'cns', None) else ""
+
+    def get_pa_formatted(self, obj):
+        # Checks 'pa' or 'abd' based on what your model uses for abdomen/PA
+        val = getattr(obj, 'pa', None) or getattr(obj, 'abd', None)
+        return f"{val}" if val else ""
 
 class DischargeSerializer(serializers.ModelSerializer):
     class Meta:

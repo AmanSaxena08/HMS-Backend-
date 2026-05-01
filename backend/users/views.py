@@ -14,6 +14,9 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from .models import PasswordResetOTP
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.decorators import api_view, permission_classes
+
+
 
 STAFF_ROLES = {
     'receptionist',
@@ -27,6 +30,31 @@ STAFF_ROLES = {
 SUPERADMIN_MANAGED_ROLES = STAFF_ROLES | {'admin', 'office_admin'}
 BRANCH_CODES = {'LNM', 'RYM'}
 ALL_BRANCH_CODE = 'ALL'
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_next_emp_id(request):
+    role = request.query_params.get('role', 'receptionist')
+    
+    role_prefixes = {
+        'office_admin': 'OFF', 'hod': 'HOD', 'billing': 'BIL',
+        'opd': 'OPD', 'intimation': 'INT', 'query': 'QRY',
+        'uploading': 'UPL', 'receptionist': 'REC', 'admin': 'ADM', 'superadmin': 'SUP'
+    }
+    prefix = role_prefixes.get(role, 'EMP')
+    
+    last_user = CustomUser.objects.filter(emp_id__startswith=prefix).order_by('id').last()
+    
+    if last_user and last_user.emp_id:
+        try:
+            last_num = int(last_user.emp_id.replace(prefix, ""))
+            new_num = last_num + 1
+        except (ValueError, TypeError):
+            new_num = 1
+    else:
+        new_num = 1
+        
+    return Response({"next_id": f"{prefix}{str(new_num).zfill(4)}"})
 
 
 def get_managed_user_queryset(user, branch_code=None):

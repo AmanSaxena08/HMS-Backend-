@@ -16,6 +16,7 @@ from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Case, When, Value, IntegerField
 from users import permissions
 from .models import (
     Patient,
@@ -1364,6 +1365,18 @@ class EmployeeMyTasksAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        tasks = Task.objects.filter(assigned_to=request.user).order_by('-created_at')
+        tasks = Task.objects.filter(assigned_to=request.user)
+        
+        # Sort logic: 
+        # 1. Pending (Value 1) comes first, then everything else (Value 2)
+        # 2. Older tasks come first ('created_at' ascending)
+        tasks = tasks.annotate(
+            status_order=Case(
+                When(status='Pending', then=Value(1)),
+                default=Value(2),
+                output_field=IntegerField(),
+            )
+        ).order_by('status_order', 'created_at')
+
         serializer = TaskSerializer(tasks, many=True)
         return Response(serializer.data)

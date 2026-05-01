@@ -15,6 +15,10 @@ class CustomUser(AbstractUser):
         ('intimation', 'Intimation'),
         ('query', 'Query'),
         ('uploading', 'Uploading'),
+        ('nursing', 'Nursing'),           
+        ('notes', 'Notes'),               
+        ('medical_officer', 'Medical Officer'), 
+        ('quality_analyst', 'Quality Analyst'), 
     )
 
     BRANCH_CHOICES = (
@@ -30,26 +34,30 @@ class CustomUser(AbstractUser):
 
     def save(self, *args, **kwargs):
         if not self.emp_id:
-            role_prefixes = {
-                'office_admin': 'OFF', 'hod': 'HOD', 'billing': 'BIL',
-                'opd': 'OPD', 'intimation': 'INT', 'query': 'QRY',
-                'uploading': 'UPL', 'receptionist': 'REC', 'admin': 'ADM', 'superadmin': 'SUP'
-            }
-            prefix = role_prefixes.get(self.role, 'EMP')
+            central_roles = ['office_admin', 'hod', 'billing', 'opd', 'intimation', 'query', 'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst', 'superadmin']
+            
+            if self.role in central_roles:
+                prefix = 'OFF'
+            elif self.role in ['admin', 'receptionist']:
+                prefix = 'LXM' if self.branch == 'LNM' else 'RAY' if self.branch == 'RYM' else 'EMP'
+            else:
+                prefix = 'EMP'
+
             last_user = CustomUser.objects.filter(emp_id__startswith=prefix).order_by('id').last()
             
             if last_user and last_user.emp_id:
                 try:
-                    last_num = int(last_user.emp_id.replace(prefix, ""))
-                    new_num = last_num + 1
-                except (ValueError, TypeError):
-                    new_num = 1
+                    last_num = int(last_user.emp_id.replace(prefix, ''))
+                    new_number = last_num + 1
+                except ValueError:
+                    new_number = 1
             else:
-                new_num = 1
+                new_number = 1
             
-            self.emp_id = f"{prefix}{str(new_num).zfill(4)}"
+            self.emp_id = f"{prefix}{str(new_number).zfill(4)}"
             
         super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
     

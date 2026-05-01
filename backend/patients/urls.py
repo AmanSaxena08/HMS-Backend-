@@ -22,14 +22,15 @@ from .views import (
     LabReportListCreateView,
     LabReportBulkSaveAPIView,
     PharmacyRecordBulkSaveAPIView,
+    DoctorViewSet, 
 )
-
 
 router = DefaultRouter()
 router.register(r'patients', PatientViewSet)
 router.register(r'service-master', ServiceMasterViewSet)
 router.register(r'report-master', views.ReportMasterViewSet, basename='report-master')
 router.register(r'medicine-master', views.MedicineMasterViewSet, basename='medicine-master')
+router.register(r'doctors', DoctorViewSet, basename='doctor') 
 
 
 

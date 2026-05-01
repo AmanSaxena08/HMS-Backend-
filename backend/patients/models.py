@@ -359,3 +359,11 @@ class PharmacyRecord(models.Model):
 
     def __str__(self):
         return f"{self.medicine_name} for {self.patient.uhid}"
+
+class Doctor(models.Model):
+    name = models.CharField(max_length=255)
+    qualification = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.qualification}"

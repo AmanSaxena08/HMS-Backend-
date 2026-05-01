@@ -19,13 +19,8 @@ from rest_framework.decorators import api_view, permission_classes
 
 
 STAFF_ROLES = {
-    'receptionist',
-    'billing',
-    'hod',
-    'opd',
-    'intimation',
-    'query',
-    'uploading',
+    'receptionist', 'billing', 'hod', 'opd', 'intimation', 'query',
+    'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst'
 }
 SUPERADMIN_MANAGED_ROLES = STAFF_ROLES | {'admin', 'office_admin'}
 BRANCH_CODES = {'LNM', 'RYM'}
@@ -35,21 +30,24 @@ ALL_BRANCH_CODE = 'ALL'
 @permission_classes([IsAuthenticated])
 def get_next_emp_id(request):
     role = request.query_params.get('role', 'receptionist')
+    branch = request.query_params.get('branch', 'LNM')
     
-    role_prefixes = {
-        'office_admin': 'OFF', 'hod': 'HOD', 'billing': 'BIL',
-        'opd': 'OPD', 'intimation': 'INT', 'query': 'QRY',
-        'uploading': 'UPL', 'receptionist': 'REC', 'admin': 'ADM', 'superadmin': 'SUP'
-    }
-    prefix = role_prefixes.get(role, 'EMP')
+    central_roles = ['office_admin', 'hod', 'billing', 'opd', 'intimation', 'query', 'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst', 'superadmin']
     
+    if role in central_roles:
+        prefix = 'OFF'
+    elif role in ['admin', 'receptionist']:
+        prefix = 'LXM' if branch == 'LNM' else 'RAY' if branch == 'RYM' else 'EMP'
+    else:
+        prefix = 'EMP'
+        
     last_user = CustomUser.objects.filter(emp_id__startswith=prefix).order_by('id').last()
     
     if last_user and last_user.emp_id:
         try:
             last_num = int(last_user.emp_id.replace(prefix, ""))
             new_num = last_num + 1
-        except (ValueError, TypeError):
+        except:
             new_num = 1
     else:
         new_num = 1

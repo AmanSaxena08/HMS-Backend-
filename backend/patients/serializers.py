@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
 from users.models import CustomUser
+from .models import Doctor 
 from .models import (
     Patient,
     Admission,
@@ -22,6 +23,11 @@ from .models import (
 class ServiceMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceMaster
+        fields = '__all__'
+
+class DoctorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Doctor
         fields = '__all__'
 
 class MedicalHistorySerializer(serializers.ModelSerializer):

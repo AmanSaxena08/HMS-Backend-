@@ -18,6 +18,8 @@ from django.template.loader import render_to_string
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Case, When, Value, IntegerField
 from users import permissions
+from .serializers import DoctorSerializer
+from .models import Doctor
 from .models import (
     Patient,
     Admission,
@@ -274,31 +276,31 @@ class PatientViewSet(viewsets.ModelViewSet):
     queryset = Patient.objects.all().order_by('-created_at')
     serializer_class = PatientSerializer
     lookup_field = 'uhid'
-    lookup_value_regex = '[^/]+' 
-
+    lookup_value_regex = '[^/]+'
 
     def get_queryset(self):
         user = self.request.user
         queryset = Patient.objects.all()
 
-        # 1. Super Admin & Office Admin see everything (Office admin filtered to cashless in JS)
+        # 1. Super Admin & Office Admin see everything
         if user.role in ['superadmin', 'office_admin']:
             return queryset
             
-        # 2. 🌟 THE FIX: Branch Admin AND Receptionists see their branch's patients!
+        # 2. Branch Admin AND Receptionists see their branch's patients!
         elif user.role in ['admin', 'receptionist']:
             return queryset.filter(branch_location=user.branch)
             
-        # 3. HOD sees tasks assigned to them, OR tasks they assigned to their department
+        # 3. HOD sees tasks assigned to them, tasks they assigned, OR ANY CASHLESS PATIENT
         elif user.role == 'hod':
-            from django.db import models # Ensure models is imported for Q objects
+            from django.db import models 
             return queryset.filter(
                 models.Q(assigned_tasks__assigned_to=user) | 
-                models.Q(assigned_tasks__assigned_by=user)
+                models.Q(assigned_tasks__assigned_by=user) |
+                models.Q(admissions__bills__bill_type='CASHLESS') # THIS GIVES HOD CASHLESS VISIBILITY
             ).distinct()
 
-        # 4. Staff only see patients explicitly assigned to them via Task Manager!
-        elif user.role in ['billing', 'opd', 'intimation', 'query', 'uploading']:
+        # 4. Staff only see patients explicitly assigned to them via Task Manager
+        elif user.role in ['billing', 'opd', 'intimation', 'query', 'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst']:
             return queryset.filter(assigned_tasks__assigned_to=user).distinct()
 
         return queryset.none()
@@ -323,6 +325,33 @@ class PatientViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print("🚨 AUTO-ADMISSION FAILED:", str(e))
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='new-admission')
+    def new_admission(self, request, uhid=None): 
+        try:
+            # 🌟 THE FIX: Fetch the patient manually using the UHID from the URL
+            # This guarantees it won't fail trying to find a default 'pk'
+            patient = get_object_or_404(Patient, uhid=uhid)
+            
+            admission_type = request.data.get('admissionType') or 'IPD'
+            
+            last_adm = Admission.objects.filter(patient=patient).order_by('id').last()
+            new_adm_no = (last_adm.admNo + 1) if last_adm else 1
+            
+            admission = Admission.objects.create(
+                patient=patient, 
+                admNo=new_adm_no,
+                admissionType=admission_type,
+            )
+            
+            # Return the fully updated patient profile to the frontend
+            serializer = self.get_serializer(patient)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            print("🚨 ADMISSION CREATION FAILED:", str(e))
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+               
 
     @action(detail=True, methods=['patch'])
     def update_medical(self, request, uhid=None):
@@ -469,33 +498,7 @@ class ServiceBulkSaveAPIView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
-    @action(detail=True, methods=['post'])
-    def new_admission(self, request, uhid=None): 
-        try:
-            patient = self.get_object()
-            admission_type = request.data.get('admissionType') or 'IPD'
-            
-            last_adm = Admission.objects.filter(patient=patient).order_by('id').last()
-            new_adm_no = (last_adm.admNo + 1) if last_adm else 1
-            
-            
-            admission = Admission.objects.create(
-                patient=patient, 
-                admNo=new_adm_no,
-                admissionType=admission_type,
-            )
-            
-            return Response({
-                "message": "Admission created successfully", 
-                "ipdNo": admission.ipdNo,
-                "admNo": admission.admNo,
-                "admissionType": admission.admissionType,
-            }, status=status.HTTP_201_CREATED)
-            
-        except Exception as e:
-            print("🚨 ADMISSION CREATION FAILED:", str(e))
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+    
     @action(detail=True, methods=['patch'])
     def set_expected_dod(self, request, uhid=None):
         patient = self.get_object()
@@ -1380,3 +1383,15 @@ class EmployeeMyTasksAPIView(APIView):
 
         serializer = TaskSerializer(tasks, many=True)
         return Response(serializer.data)
+class DoctorViewSet(viewsets.ModelViewSet):
+    queryset = Doctor.objects.all().order_by('name')
+    serializer_class = DoctorSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = None # Return all doctors at once for the dropdown
+
+    # Restrict POST/PUT/DELETE to Admins only
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        if request.method not in ['GET', 'HEAD', 'OPTIONS']:
+            if getattr(request.user, 'role', '') not in ['superadmin', 'admin', 'office_admin']:
+                self.permission_denied(request, message="Only Admins can manage the doctors list.")

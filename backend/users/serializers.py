@@ -6,19 +6,26 @@ from .models import CustomUser
 
 
 GLOBAL_ACCESS_ROLES = {'superadmin', 'office_admin'}
-EMPLOYEE_ID_PREFIXES = {
-    'LNM': 'LAK',
-    'RYM': 'RAY',
-    'ALL': 'OFF',
-}
 
+def get_employee_id_prefix(role, branch):
+    central_roles = [
+        'office_admin', 'hod', 'billing', 'opd', 'intimation', 
+        'query', 'uploading', 'nursing', 'notes', 'medical_officer', 
+        'quality_analyst', 'superadmin'
+    ]
+    if role in central_roles:
+        return 'OFF'
+    
+    if role in ['admin', 'receptionist']:
+        if branch == 'LNM':
+            return 'LXM'
+        if branch == 'RYM':
+            return 'RAY'
+            
+    return 'EMP'
 
-def get_employee_id_prefix(branch):
-    return EMPLOYEE_ID_PREFIXES.get(str(branch or '').strip().upper(), 'EMP')
-
-
-def generate_employee_id(branch):
-    prefix = get_employee_id_prefix(branch)
+def generate_employee_id(role, branch):
+    prefix = get_employee_id_prefix(role, branch)
     highest_suffix = 0
     for emp_id in CustomUser.objects.filter(emp_id__startswith=prefix).values_list('emp_id', flat=True):
         suffix = str(emp_id)[len(prefix):]
@@ -35,7 +42,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-        # Add custom claims to the token itself if needed later
         token['role'] = user.role
         token['branch'] = user.branch
         token['access_scope'] = get_access_scope(user)
@@ -82,8 +88,10 @@ class UserManagementSerializer(serializers.ModelSerializer):
         password = data.get('password')
         confirm_password = data.get('confirm_password')
         branch = str(data.get('branch') or getattr(self.instance, 'branch', '') or '').strip().upper()
+        role = str(data.get('role') or getattr(self.instance, 'role', 'receptionist')).strip()
         emp_id = str(data.get('emp_id') or getattr(self.instance, 'emp_id', '') or '').strip().upper()
-        expected_prefix = get_employee_id_prefix(branch) if branch else ''
+        
+        expected_prefix = get_employee_id_prefix(role, branch)
 
         if self.instance is None and not password:
             raise serializers.ValidationError({"password": "Password is required."})
@@ -95,8 +103,8 @@ class UserManagementSerializer(serializers.ModelSerializer):
         if self.instance is None:
             if emp_id and expected_prefix and not emp_id.startswith(expected_prefix):
                 raise serializers.ValidationError({"emp_id": f"Employee ID must start with {expected_prefix}."})
-            if not emp_id and branch:
-                data['emp_id'] = generate_employee_id(branch)
+            if not emp_id:
+                data['emp_id'] = generate_employee_id(role, branch)
             elif emp_id:
                 data['emp_id'] = emp_id
         elif emp_id:
@@ -128,7 +136,6 @@ class AdminPasswordResetSerializer(serializers.Serializer):
     confirm_new_password = serializers.CharField(write_only=True, required=True)
 
     def validate_new_password(self, value):
-        # We reuse our rules: 8 chars, no spaces, special char
         if len(value) < 8 or ' ' in value or not re.search(r'[!@#$%^&*(),.?":{}|<>]', value):
             raise serializers.ValidationError("Password does not meet security requirements.")
         return value
@@ -148,7 +155,6 @@ class VerifyOTPandResetSerializer(serializers.Serializer):
     confirm_new_password = serializers.CharField(write_only=True, required=True)
 
     def validate_new_password(self, value):
-        # Enforce our strict password rules
         if len(value) < 8 or ' ' in value or not re.search(r'[!@#$%^&*(),.?":{}|<>]', value):
             raise serializers.ValidationError("Password must be 8+ chars, no spaces, and have a special character.")
         return value
@@ -157,7 +163,6 @@ class VerifyOTPandResetSerializer(serializers.Serializer):
         if data.get('new_password') != data.get('confirm_new_password'):
             raise serializers.ValidationError({"confirm_new_password": "Passwords do not match."})
         return data
-
 
 class SelfProfileSerializer(serializers.ModelSerializer):
     class Meta:

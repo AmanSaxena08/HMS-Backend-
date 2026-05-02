@@ -293,13 +293,14 @@ class PatientViewSet(viewsets.ModelViewSet):
         elif user.role in ['admin', 'receptionist']:
             return queryset.filter(branch_location=user.branch)
             
-        # 3. HOD sees tasks assigned to them, tasks they assigned, OR ANY CASHLESS PATIENT
+        # 3. 🌟 THE FIX: HOD sees their tasks, tasks they assigned, OR ANY CASHLESS PATIENT
         elif user.role == 'hod':
             from django.db import models 
             return queryset.filter(
                 models.Q(assigned_tasks__assigned_to=user) | 
                 models.Q(assigned_tasks__assigned_by=user) |
-                models.Q(admissions__bills__bill_type='CASHLESS') # THIS GIVES HOD CASHLESS VISIBILITY
+                models.Q(payMode__icontains='cashless') |
+                models.Q(admissions__bills__bill_type='CASHLESS')
             ).distinct()
 
         # 4. Staff only see patients explicitly assigned to them via Task Manager
@@ -1275,15 +1276,9 @@ class BulkTaskAssignAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        # 1. Check if user is in the updated TASK_MANAGER_ROLES
         if request.user.role not in TASK_MANAGER_ROLES:
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
-
-        # HOD can only bulk-assign within their own branch
-        if request.user.role == 'hod':
-            if getattr(request.user, 'branch', None) not in ['LNM', 'RYM']:
-                return Response({"error": "HOD must have a branch assigned."}, status=status.HTTP_403_FORBIDDEN)
-        
-
 
         serializer = BulkTaskAssignSerializer(data=request.data)
         if serializer.is_valid():
@@ -1298,7 +1293,7 @@ class BulkTaskAssignAPIView(APIView):
                 return Response({"error": "Assigned user not found."}, status=status.HTTP_404_NOT_FOUND)
 
             try:
-                validate_generic_task_assignment(request.user, assigned_to_user, department=department)
+                validate_generic_task_assignment(request.user, assigned_to_user)
             except PermissionDenied as exc:
                 return Response({"error": str(exc.detail)}, status=status.HTTP_403_FORBIDDEN)
             except ValidationError as exc:
@@ -1309,7 +1304,7 @@ class BulkTaskAssignAPIView(APIView):
                 try:
                     patient = Patient.objects.get(id=pid)
                     
-                    # 👇 ADDED: HOD can only assign patients from their own branch
+                    # 🌟 THE FIX: HOD can only assign patients from their own branch
                     if request.user.role == 'hod' and patient.branch_location != request.user.branch:
                         return Response(
                             {"error": f"Patient {patient.uhid} does not belong to your branch."},
@@ -1320,7 +1315,6 @@ class BulkTaskAssignAPIView(APIView):
                         request.user,
                         assigned_to_user,
                         patient=patient,
-                        department=department,
                     )
                     
                     tasks_to_create.append(
@@ -1339,7 +1333,7 @@ class BulkTaskAssignAPIView(APIView):
                     continue
 
             Task.objects.bulk_create(tasks_to_create)
-            # 👇 FIXED: Changed assigned_to_user.name to .username
+            
             return Response(
                 {"message": f"Successfully assigned {len(tasks_to_create)} patients to {assigned_to_user.username}."}, 
                 status=status.HTTP_201_CREATED

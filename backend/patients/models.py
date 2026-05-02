@@ -112,9 +112,18 @@ class Admission(models.Model):
 
 class MedicalHistory(models.Model):
     admission = models.OneToOneField(Admission, related_name='medicalHistory', on_delete=models.CASCADE)
+    bp = models.CharField(max_length=50, blank=True, null=True)
+    spo2 = models.CharField(max_length=50, blank=True, null=True)
+    pulse = models.CharField(max_length=50, blank=True, null=True) # PR
+    temp = models.CharField(max_length=50, blank=True, null=True)
+    chest = models.CharField(max_length=100, blank=True, null=True)
+    cvs = models.CharField(max_length=100, blank=True, null=True)
+    cns = models.CharField(max_length=100, blank=True, null=True)
+    pa = models.CharField(max_length=100, blank=True, null=True)
     previousDiagnosis = models.TextField(blank=True)
     pastSurgeries = models.TextField(blank=True)
     currentMedications = models.TextField(blank=True)
+    investigations = models.TextField(blank=True, null=True)
     treatingDoctor = models.CharField(max_length=150, blank=True)
     knownAllergies = models.TextField(blank=True)
     chronicConditions = models.TextField(blank=True)

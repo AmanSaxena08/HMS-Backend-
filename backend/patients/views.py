@@ -1375,16 +1375,53 @@ class EmployeeTaskUpdateAPIView(APIView):
 
     def patch(self, request, task_id):
         try:
-            task = Task.objects.get(id=task_id, assigned_to=request.user)
+            task = Task.objects.get(id=task_id)
         except Task.DoesNotExist:
-            return Response({"error": "Task not found or not assigned to you."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
         
-        new_status = request.data.get('status')
-        if new_status in dict(Task.STATUS_CHOICES):
-            task.status = new_status
+        user = request.user
+        is_admin_or_hod = user.role in ['superadmin', 'office_admin', 'hod']
+
+        # 1. Authorization: Must be the assigned employee OR an admin/hod
+        if task.assigned_to != user and not is_admin_or_hod:
+            return Response({"error": "Not authorized to update this task."}, status=status.HTTP_403_FORBIDDEN)
+
+        # 2. 🌟 THE LOCK: Block employee if completed, but let Admin/HOD bypass
+        if task.status == 'Completed' and not is_admin_or_hod:
+            return Response(
+                {"error": "This task is already submitted and locked. Only an HOD or Admin can edit it now."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # 3. Normalize Status
+        raw_status = str(request.data.get('status', task.status)).strip().title()
+        if raw_status.lower() == 'completed':
+            raw_status = 'Completed'
+        elif raw_status.lower() in ['in progress', 'inprogress']:
+            raw_status = 'In Progress'
+
+        valid_statuses = ['Pending', 'In Progress', 'Completed', 'On Hold', 'Overdue']
+        
+        if raw_status in valid_statuses:
+            task.status = raw_status
+            
+            # 4. Capture the work & label who wrote it
+            work_done = request.data.get('work_done') or request.data.get('remarks') or request.data.get('notes')
+            if work_done:
+                role_label = "HOD/Admin" if is_admin_or_hod else "Employee"
+                if task.description:
+                    task.description = f"{task.description}\n\n[{role_label} Update]: {work_done}"
+                else:
+                    task.description = f"[{role_label} Update]: {work_done}"
+
             task.save()
-            return Response({"message": "Task updated successfully", "status": task.status})
-        return Response({"error": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                "message": "Task updated successfully!", 
+                "status": task.status,
+                "notes": task.description
+            }, status=status.HTTP_200_OK)
+            
+        return Response({"error": f"Invalid status. Must be one of {valid_statuses}"}, status=status.HTTP_400_BAD_REQUEST)
 
 class EmployeeMyTasksAPIView(APIView):
     permission_classes = [IsAuthenticated]

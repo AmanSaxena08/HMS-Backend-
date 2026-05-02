@@ -449,9 +449,27 @@ class TaskSerializer(serializers.ModelSerializer):
         return attrs
 
 class BulkTaskAssignSerializer(serializers.Serializer):
-    assign_to = serializers.IntegerField()
-    patient_ids = serializers.ListField(
-        child=serializers.IntegerField(), allow_empty=False
-    )
+    # Accept the frontend's exact keys OR our backend keys
+    assignedToId = serializers.IntegerField(required=False)
+    assign_to = serializers.IntegerField(required=False)
+    
+    patients = serializers.ListField(child=serializers.IntegerField(), required=False)
+    patient_ids = serializers.ListField(child=serializers.IntegerField(), required=False)
+    
     department = serializers.CharField(max_length=100)
     title = serializers.CharField(max_length=255, required=False, default="Patient Billing Task")
+
+    def validate(self, attrs):
+        # Consolidate keys so the View knows exactly what to do
+        final_assign_to = attrs.get('assignedToId') or attrs.get('assign_to')
+        final_patient_ids = attrs.get('patients') or attrs.get('patient_ids')
+
+        if not final_assign_to:
+            raise serializers.ValidationError({"assign_to": "Employee ID is required."})
+        if not final_patient_ids:
+            raise serializers.ValidationError({"patient_ids": "At least one patient ID is required."})
+
+        # Overwrite attrs with the standard keys expected by the View
+        attrs['assign_to'] = final_assign_to
+        attrs['patient_ids'] = final_patient_ids
+        return attrs

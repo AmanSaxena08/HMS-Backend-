@@ -3,6 +3,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 import re
 from rest_framework import serializers
 from .models import CustomUser
+from django.db import transaction
 
 
 GLOBAL_ACCESS_ROLES = {'superadmin', 'office_admin'}
@@ -26,12 +27,19 @@ def get_employee_id_prefix(role, branch):
 
 def generate_employee_id(role, branch):
     prefix = get_employee_id_prefix(role, branch)
-    highest_suffix = 0
-    for emp_id in CustomUser.objects.filter(emp_id__startswith=prefix).values_list('emp_id', flat=True):
-        suffix = str(emp_id)[len(prefix):]
-        if suffix.isdigit():
-            highest_suffix = max(highest_suffix, int(suffix))
-    return f"{prefix}{highest_suffix + 1:04d}"
+    with transaction.atomic():
+        users = (
+            CustomUser.objects
+            .select_for_update()
+            .filter(emp_id__startswith=prefix)
+            .values_list('emp_id', flat=True)
+        )
+        highest = 0
+        for emp_id in users:
+            suffix = str(emp_id)[len(prefix):]
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
+        return f"{prefix}{highest + 1:04d}"
 
 
 def get_access_scope(user):

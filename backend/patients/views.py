@@ -71,8 +71,11 @@ DEPARTMENT_LOG_FIELDS = {
     'query': ['queryRepDate', 'createdAt', 'raiseDate'],
     'uploading': ['uploadDate', 'createdAt', 'doa'],
 }
-TASK_MANAGER_ROLES = {'superadmin', 'office_admin', 'admin'}
-TASK_ASSIGNABLE_ROLES = {'receptionist', 'billing', 'hod', 'opd', 'intimation', 'query', 'uploading'}
+TASK_MANAGER_ROLES = {'superadmin', 'office_admin', 'admin', 'hod'}
+TASK_ASSIGNABLE_ROLES = {
+    'receptionist', 'billing', 'hod', 'opd', 'intimation', 'query', 'uploading',
+    'nursing', 'notes', 'medical_officer', 'quality_analyst',
+}
 
 def normalize_task_status(raw_status, due_date=None):
     status_map = {
@@ -703,7 +706,10 @@ class TaskReportAPIView(APIView):
         if request.user.role not in ['superadmin', 'office_admin', 'admin', 'hod']:
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
 
-        staff = CustomUser.objects.filter(role__in=['billing', 'opd', 'intimation', 'query', 'uploading', 'hod'])
+        staff = CustomUser.objects.filter(role__in=[
+    'billing', 'opd', 'intimation', 'query', 'uploading', 'hod',
+    'nursing', 'notes', 'medical_officer', 'quality_analyst',
+])
         if request.user.role == 'admin':
             staff = staff.filter(branch=request.user.branch)
         
@@ -1272,6 +1278,13 @@ class BulkTaskAssignAPIView(APIView):
         if request.user.role not in TASK_MANAGER_ROLES:
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
 
+        # HOD can only bulk-assign within their own branch
+        if request.user.role == 'hod':
+            if getattr(request.user, 'branch', None) not in ['LNM', 'RYM']:
+                return Response({"error": "HOD must have a branch assigned."}, status=status.HTTP_403_FORBIDDEN)
+        
+
+
         serializer = BulkTaskAssignSerializer(data=request.data)
         if serializer.is_valid():
             assign_to_id = serializer.validated_data['assign_to']
@@ -1295,12 +1308,21 @@ class BulkTaskAssignAPIView(APIView):
             for pid in patient_ids:
                 try:
                     patient = Patient.objects.get(id=pid)
+                    
+                    # 👇 ADDED: HOD can only assign patients from their own branch
+                    if request.user.role == 'hod' and patient.branch_location != request.user.branch:
+                        return Response(
+                            {"error": f"Patient {patient.uhid} does not belong to your branch."},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
                     validate_generic_task_assignment(
                         request.user,
                         assigned_to_user,
                         patient=patient,
                         department=department,
                     )
+                    
                     tasks_to_create.append(
                         Task(
                             title=title,
@@ -1318,7 +1340,11 @@ class BulkTaskAssignAPIView(APIView):
 
             Task.objects.bulk_create(tasks_to_create)
             # 👇 FIXED: Changed assigned_to_user.name to .username
-            return Response({"message": f"Successfully assigned {len(tasks_to_create)} patients to {assigned_to_user.username}."}, status=status.HTTP_201_CREATED)
+            return Response(
+                {"message": f"Successfully assigned {len(tasks_to_create)} patients to {assigned_to_user.username}."}, 
+                status=status.HTTP_201_CREATED
+            )
+            
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class TaskAnalyticsAPIView(APIView):
@@ -1374,12 +1400,14 @@ class EmployeeMyTasksAPIView(APIView):
         # 1. Pending (Value 1) comes first, then everything else (Value 2)
         # 2. Older tasks come first ('created_at' ascending)
         tasks = tasks.annotate(
-            status_order=Case(
-                When(status='Pending', then=Value(1)),
-                default=Value(2),
-                output_field=IntegerField(),
-            )
-        ).order_by('status_order', 'created_at')
+    status_order=Case(
+        When(status='Pending', then=Value(1)),
+        When(status='In Progress', then=Value(2)), 
+        When(status='Overdue', then=Value(3)),
+        default=Value(4),                             
+        output_field=IntegerField(),
+    )
+).order_by('status_order', 'created_at')
 
         serializer = TaskSerializer(tasks, many=True)
         return Response(serializer.data)

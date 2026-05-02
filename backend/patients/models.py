@@ -3,7 +3,7 @@ from django.utils import timezone
 import datetime
 from django.conf import settings
 from users.models import CustomUser
-
+from django.db import transaction
 
 class Patient(models.Model):
     BRANCH_CHOICES = [('LNM', 'Laxmi Nagar'), ('RYM', 'Raya')]
@@ -37,32 +37,29 @@ class Patient(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.uhid:
-            # 1. Determine the prefix based on the branch
             prefix = "SHL" if self.branch_location == "LNM" else "SHR"
-            
-            # 2. Safely find the last patient registered in this specific branch
-            last_patient = Patient.objects.filter(branch_location=self.branch_location).order_by('id').last()
-            
-            if last_patient and last_patient.uhid:
-                try:
-                    # Extract the numeric part (e.g., "0000001" from "SHL-0000001")
-                    last_number_str = last_patient.uhid.split("-")[1]
-                    last_number = int(last_number_str)
-                    new_number = last_number + 1
-                except (IndexError, ValueError):
-                    # Fallback if the previous UHID format was weird
+            with transaction.atomic():
+                # Lock all rows for this branch — prevents race conditions
+                last_patient = (
+                    Patient.objects
+                    .select_for_update()
+                    .filter(branch_location=self.branch_location)
+                    .order_by('id')
+                    .last()
+                )
+                if last_patient and last_patient.uhid:
+                    try:
+                        # Use [-1] not [1] — handles both old (SHL-000-1) and new (SHL-0000001) format
+                        last_number = int(last_patient.uhid.split("-")[-1])
+                        new_number = last_number + 1
+                    except (IndexError, ValueError):
+                        new_number = 1
+                else:
                     new_number = 1
-            else:
-                # If this is the very first patient for this branch
-                new_number = 1
-            
-            # 3. Format the new number with 7 digits (e.g., 1 becomes "0000001")
-            formatted_number = str(new_number).zfill(7)
-            
-            # 4. Construct the final UHID
-            self.uhid = f"{prefix}-{formatted_number}"
-            
-        super().save(*args, **kwargs)
+                self.uhid = f"{prefix}-{str(new_number).zfill(7)}"
+                super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 class Admission(models.Model):
     ADMISSION_TYPE_CHOICES = (
@@ -91,22 +88,27 @@ class Admission(models.Model):
         if not self.ipdNo:
             year = datetime.datetime.now().strftime('%y')
             prefix = f"SH/GEN/{year}/"
-            last_admission = Admission.objects.filter(
-                ipdNo__startswith=prefix
-            ).order_by('-ipdNo').first()
-            
-            if last_admission:
-                try:
-                    last_sequence = int(last_admission.ipdNo.split('/')[-1])
-                    new_sequence = last_sequence + 1
-                except (ValueError, IndexError):
+            with transaction.atomic():
+                # Sort by -id (integer) not -ipdNo (string) — string sort breaks after 9999
+                last_admission = (
+                    Admission.objects
+                    .select_for_update()
+                    .filter(ipdNo__startswith=prefix)
+                    .order_by('-id')
+                    .first()
+                )
+                if last_admission:
+                    try:
+                        last_sequence = int(last_admission.ipdNo.split('/')[-1])
+                        new_sequence = last_sequence + 1
+                    except (ValueError, IndexError):
+                        new_sequence = 1001
+                else:
                     new_sequence = 1001
-            else:
-                new_sequence = 1001
-            
-            self.ipdNo = f"{prefix}{new_sequence}"
-            
-        super().save(*args, **kwargs)
+                self.ipdNo = f"{prefix}{new_sequence}"
+                super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 class MedicalHistory(models.Model):
     admission = models.OneToOneField(Admission, related_name='medicalHistory', on_delete=models.CASCADE)

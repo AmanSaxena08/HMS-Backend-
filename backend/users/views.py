@@ -18,10 +18,14 @@ from rest_framework.decorators import api_view, permission_classes
 
 
 
-STAFF_ROLES = {
-    'receptionist', 'billing', 'hod', 'opd', 'intimation', 'query',
+CENTRAL_STAFF_ROLES = {
+    'billing', 'hod', 'opd', 'intimation', 'query',
     'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst'
 }
+BRANCH_STAFF_ROLES = {'receptionist'}
+
+# Combine them for general checks
+STAFF_ROLES = CENTRAL_STAFF_ROLES | BRANCH_STAFF_ROLES
 SUPERADMIN_MANAGED_ROLES = STAFF_ROLES | {'admin', 'office_admin'}
 BRANCH_CODES = {'LNM', 'RYM'}
 ALL_BRANCH_CODE = 'ALL'
@@ -59,17 +63,21 @@ def get_managed_user_queryset(user, branch_code=None):
     if user.role == 'superadmin':
         return CustomUser.objects.all().order_by('id')
     if user.role == 'office_admin':
-        return CustomUser.objects.filter(branch=ALL_BRANCH_CODE).exclude(role__in={'superadmin', 'office_admin'}).order_by('id')
+        # 🌟 Office Admin only sees central roles
+        return CustomUser.objects.filter(role__in=CENTRAL_STAFF_ROLES).order_by('id')
     if user.role == 'admin':
-        return CustomUser.objects.filter(branch=user.branch).order_by('id')
+        # 🌟 Branch Admin only sees Receptionists from their specific branch
+        return CustomUser.objects.filter(role__in=BRANCH_STAFF_ROLES, branch=user.branch).order_by('id')
     return CustomUser.objects.none()
 
 
 def get_allowed_target_roles(user):
     if user.role == 'superadmin':
         return SUPERADMIN_MANAGED_ROLES
-    if user.role in {'office_admin', 'admin'}:
-        return STAFF_ROLES
+    if user.role == 'office_admin':
+        return CENTRAL_STAFF_ROLES  # 🌟 Excludes Receptionist
+    if user.role == 'admin':
+        return BRANCH_STAFF_ROLES   # 🌟 Restricts to Receptionist only
     return set()
 
 

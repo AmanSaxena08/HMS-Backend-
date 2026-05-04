@@ -12,7 +12,7 @@ def get_employee_id_prefix(role, branch):
     central_roles = [
         'office_admin', 'hod', 'billing', 'opd', 'intimation', 
         'query', 'uploading', 'nursing', 'notes', 'medical_officer', 
-        'quality_analyst', 'superadmin'
+        'quality_analyst', 'superadmin', 'doctor' 
     ]
     if role in central_roles:
         return 'OFF'

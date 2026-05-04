@@ -19,6 +19,7 @@ class CustomUser(AbstractUser):
         ('notes', 'Notes'),               
         ('medical_officer', 'Medical Officer'), 
         ('quality_analyst', 'Quality Analyst'), 
+        ('doctor', 'Doctor'),
     )
 
     BRANCH_CHOICES = (

@@ -20,7 +20,7 @@ from rest_framework.decorators import api_view, permission_classes
 
 CENTRAL_STAFF_ROLES = {
     'billing', 'hod', 'opd', 'intimation', 'query',
-    'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst'
+    'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst', 'doctor'
 }
 BRANCH_STAFF_ROLES = {'receptionist'}
 
@@ -33,10 +33,21 @@ ALL_BRANCH_CODE = 'ALL'
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_next_emp_id(request):
-    role = request.query_params.get('role', 'receptionist')
-    branch = request.query_params.get('branch', 'LNM')
+    user = request.user
     
-    central_roles = ['office_admin', 'hod', 'billing', 'opd', 'intimation', 'query', 'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst', 'superadmin']
+
+    if user.role == 'admin':
+        role = 'receptionist'
+        branch = user.branch
+    else:
+        role = request.query_params.get('role', 'receptionist')
+        branch = request.query_params.get('branch', 'LNM')
+        
+    central_roles = [
+        'office_admin', 'hod', 'billing', 'opd', 'intimation', 
+        'query', 'uploading', 'nursing', 'notes', 'medical_officer', 
+        'quality_analyst', 'superadmin', 'doctor' 
+    ]
     
     if role in central_roles:
         prefix = 'OFF'

@@ -319,6 +319,12 @@ class DepartmentLogEntry(models.Model):
         ('intimation', 'Intimation'),
         ('query', 'Query'),
         ('uploading', 'Uploading'),
+        ('billing', 'Billing'),             
+        ('nursing', 'Nursing'),             
+        ('doctor', 'Doctor'),               
+        ('notes', 'Notes'),                 
+        ('quality_analyst', 'Quality Analysis'), 
+        ('medical_officer', 'Medical Officer'),  
     )
 
     BRANCH_CHOICES = (
@@ -330,7 +336,7 @@ class DepartmentLogEntry(models.Model):
     branch = models.CharField(max_length=10, choices=BRANCH_CHOICES, default='LNM')
     record_date = models.DateField()
     data = models.JSONField(default=dict)
-    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='department_logs_created')
+    created_by = models.ForeignKey('users.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='department_logs_created')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -378,3 +384,21 @@ class Doctor(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.qualification}"
+
+class HospitalSettings(models.Model):
+    # Match these exactly to your Patient model's BRANCH_CHOICES
+    BRANCH_CHOICES = [('LNM', 'Laxmi Nagar'), ('RYM', 'Raya')]
+    
+    branch = models.CharField(max_length=3, choices=BRANCH_CHOICES, unique=True, default='LNM')
+    
+    hospital_name = models.CharField(max_length=255, default="SANGI HOSPITAL")
+    branch_name = models.CharField(max_length=255, default="Lakshmi Nagar Branch")
+    address = models.TextField(default="Lakshmi Nagar, Mathura, Uttar Pradesh - 281004")
+    phone = models.CharField(max_length=150, default="+91-9717444531 / +91-9717444532")
+    email = models.EmailField(default="laxminagar@sangihospital.com")
+    website = models.URLField(default="https://www.sangihospital.com")
+    
+    logo = models.ImageField(upload_to='logos/', blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.hospital_name} - {self.get_branch_display()}"

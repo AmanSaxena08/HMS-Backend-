@@ -1,4 +1,5 @@
 import datetime
+import os 
 import csv
 import json
 from urllib.parse import quote
@@ -33,6 +34,7 @@ from .models import (
     LabReport,
     HODReview,
     DepartmentLogEntry,
+    HospitalSettings,
 )
 from .serializers import (
     PatientSerializer,
@@ -47,6 +49,13 @@ from .serializers import (
     HODReviewSerializer,
     DepartmentLogEntrySerializer, BulkTaskAssignSerializer
 )
+import qrcode
+import base64
+import io
+from django.conf import settings
+from django.template.loader import render_to_string
+from django.http import HttpResponse
+from xhtml2pdf import pisa
 import copy
 from .templates import DISCHARGE_TEMPLATES
 import io
@@ -297,20 +306,28 @@ class PatientViewSet(viewsets.ModelViewSet):
         user = self.request.user
 
         if not getattr(user, 'is_authenticated', False):
-            return Patient.objects.none() # Safely return an empty list instead of crashing
-        
+            return Patient.objects.none()
 
         queryset = Patient.objects.all()
 
+        # 🌟 THE TASK FIX: Hide patients that already have active tasks in a specific department
+        # We check if the frontend is asking us to exclude assigned patients
+        exclude_dept = self.request.query_params.get('exclude_active_tasks_for_dept')
+        if exclude_dept:
+            queryset = queryset.exclude(
+                assigned_tasks__department__iexact=exclude_dept,
+                assigned_tasks__status__in=['Pending', 'In Progress']
+            )
+
         # 1. Super Admin & Office Admin see everything
         if user.role in ['superadmin', 'office_admin']:
-            return queryset
+            return queryset.order_by('-created_at')
             
         # 2. Branch Admin AND Receptionists see their branch's patients!
         elif user.role in ['admin', 'receptionist']:
-            return queryset.filter(branch_location=user.branch)
+            return queryset.filter(branch_location=user.branch).order_by('-created_at')
             
-        # 3. 🌟 THE FIX: HOD sees their tasks, tasks they assigned, OR ANY CASHLESS PATIENT
+        # 3. HOD sees their tasks, tasks they assigned, OR ANY CASHLESS PATIENT
         elif user.role == 'hod':
             from django.db import models 
             return queryset.filter(
@@ -318,11 +335,11 @@ class PatientViewSet(viewsets.ModelViewSet):
                 models.Q(assigned_tasks__assigned_by=user) |
                 models.Q(payMode__icontains='cashless') |
                 models.Q(admissions__bills__bill_type='CASHLESS')
-            ).distinct()
+            ).distinct().order_by('-created_at')
 
         # 4. Staff only see patients explicitly assigned to them via Task Manager
         elif user.role in ['billing', 'opd', 'intimation', 'query', 'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst']:
-            return queryset.filter(assigned_tasks__assigned_to=user).distinct()
+            return queryset.filter(assigned_tasks__assigned_to=user).distinct().order_by('-created_at')
 
         return queryset.none()
     
@@ -1465,3 +1482,106 @@ class DoctorViewSet(viewsets.ModelViewSet):
         if request.method not in ['GET', 'HEAD', 'OPTIONS']:
             if getattr(request.user, 'role', '') not in ['superadmin', 'admin', 'office_admin']:
                 self.permission_denied(request, message="Only Admins can manage the doctors list.")
+
+
+class PrintBillView(APIView):
+    # If you want to test this easily in the browser without a token, uncomment the line below temporarily:
+    permission_classes = [] 
+
+    def get(self, request, uhid, adm_no):
+        admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
+        patient = admission.patient
+        discharge = getattr(admission, 'discharge', None)
+        
+        billing_obj, _ = get_or_create_current_billing(admission)
+        services = admission.services.all().order_by('svcDate', 'id')
+
+        # 🧮 1. Calculate Totals
+        gross_total = sum((svc.svcTot or 0) for svc in services)
+        discount = billing_obj.discount or Decimal('0.00')
+        advance = billing_obj.advance or Decimal('0.00')
+        net_payable = gross_total - discount - advance
+
+        age = "--"
+        if patient.dob:
+            calc_age = (timezone.now().date() - patient.dob).days // 365
+            age = f"{calc_age} YRS"
+
+        # 🌟 2. Fetch Dynamic Hospital Settings based on the PATIENT'S BRANCH!
+        settings_obj = HospitalSettings.objects.filter(branch=patient.branch_location).first()
+        
+        # Fallback just in case the Admin hasn't created settings for this branch yet
+        if not settings_obj:
+            settings_obj = HospitalSettings.objects.first()
+
+        logo_base64 = ""
+        
+        # First, try to use the logo uploaded via the Admin panel
+        if settings_obj and settings_obj.logo and hasattr(settings_obj.logo, 'path'):
+            if os.path.exists(settings_obj.logo.path):
+                with open(settings_obj.logo.path, "rb") as image_file:
+                    logo_base64 = base64.b64encode(image_file.read()).decode("utf-8")
+        
+        # If no custom logo is uploaded, fallback to the default static logo
+        if not logo_base64:
+            logo_path = os.path.join(settings.BASE_DIR, 'static', 'logo.png')
+            if os.path.exists(logo_path):
+                with open(logo_path, "rb") as image_file:
+                    logo_base64 = base64.b64encode(image_file.read()).decode("utf-8")
+        # 🌟 3. Generate the QR Code dynamically (using the dynamic website URL!)
+        qr_url = settings_obj.website if settings_obj and settings_obj.website else "https://sangihospital.com/"
+        qr = qrcode.make(qr_url)
+        buffer = io.BytesIO()
+        qr.save(buffer, format="PNG")
+        qr_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        # 🌟 4. Safely handle Room/Ward to prevent NoneType crash if patient isn't discharged
+        safe_room = discharge.roomNo if discharge and discharge.roomNo else '--'
+        safe_ward = discharge.wardName.upper() if discharge and discharge.wardName else '--'
+        room_ward = f"{safe_room} / {safe_ward}"
+
+        # 📋 5. Build the context for the HTML template
+        context = {
+            "current_date": timezone.now().strftime("%d/%m/%Y"),
+            "admission_type": admission.admissionType.upper(),
+            "uhid": patient.uhid,
+            "bill_no": f"{billing_obj.id}/{admission.dateTime.strftime('%y')}" if billing_obj else "--",
+            "ipd_no": admission.ipdNo or "--",
+            "bill_date": timezone.now().strftime("%d/%m/%Y %H:%M HRS"),
+            "patient_name": patient.patientName.upper(),
+            "age_sex": f"{age} / {patient.gender.upper()}",
+            "guardian_name": patient.guardianName.upper() if patient.guardianName else "--",
+            "address": patient.address or "--",
+            "consultant": discharge.doctorName.upper() if discharge and discharge.doctorName else "--",
+            "room_ward": room_ward,
+            "claim_id": patient.tpaPanelCardNo or "--",
+            "panel": patient.tpa.upper() if patient.tpa else patient.payMode.upper(),
+            "doa": timezone.localtime(admission.dateTime).strftime("%d/%m/%Y, %I:%M %p") if admission.dateTime else "--",
+            "contact_no": patient.phone or "--",
+            "dod": timezone.localtime(discharge.dod).strftime("%d/%m/%Y, %I:%M %p") if discharge and discharge.dod else "--",
+            "discharge_status": discharge.dischargeStatus.upper() if discharge and discharge.dischargeStatus else "--",
+            
+            # The Data & Math
+            "services": services,
+            "gross_total": f"{gross_total:,.2f}",
+            "discount": f"{discount:,.2f}",
+            "advance": f"{advance:,.2f}",
+            "net_payable": f"{net_payable:,.2f}",
+            
+            # The Images
+            "qr_code": qr_base64,
+            "logo_base64": logo_base64,
+            "hospital": settings_obj, 
+        }
+
+        # 🖨️ 6. Render the PDF
+        html_string = render_to_string("pdf/bill.html", context)
+        result = io.BytesIO()
+        pdf = pisa.pisaDocument(io.BytesIO(html_string.encode("UTF-8")), result)
+        
+        if not pdf.err:
+            response = HttpResponse(result.getvalue(), content_type='application/pdf')
+            response['Content-Disposition'] = f'inline; filename="{patient.uhid}_final_bill.pdf"'
+            return response
+            
+        return Response({"error": "PDF Generation Failed"}, status=status.HTTP_400_BAD_REQUEST)

@@ -23,6 +23,7 @@ from .views import (
     LabReportBulkSaveAPIView,
     PharmacyRecordBulkSaveAPIView,
     DoctorViewSet, 
+    PrintBillView,
 )
 
 router = DefaultRouter()
@@ -61,4 +62,5 @@ urlpatterns = [
     path('tasks/analytics/', views.TaskAnalyticsAPIView.as_view(), name='task-analytics'),
     path('tasks/<int:task_id>/update-status/', views.EmployeeTaskUpdateAPIView.as_view(), name='task-update-status'),
     path('tasks/my-tasks/', views.EmployeeMyTasksAPIView.as_view(), name='task-my-tasks'),
+    path('patients/<str:uhid>/admissions/<str:adm_no>/bill/print/', PrintBillView.as_view(), name='print-bill'),
 ]

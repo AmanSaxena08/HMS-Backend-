@@ -63,6 +63,10 @@ DEPARTMENT_ROLE_MAP = {
     'OPD': 'opd',
     'Intimation': 'intimation',
     'Receptionist': 'receptionist',
+    'Nursing': 'nursing',
+    'Doctor': 'doctor',
+    'Notes': 'notes',
+    'Quality Analysis': 'quality_analyst',  
 }
 
 DEPARTMENT_LOG_FIELDS = {
@@ -291,6 +295,11 @@ class PatientViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+
+        if not getattr(user, 'is_authenticated', False):
+            return Patient.objects.none() # Safely return an empty list instead of crashing
+        
+
         queryset = Patient.objects.all()
 
         # 1. Super Admin & Office Admin see everything

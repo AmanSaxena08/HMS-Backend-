@@ -49,6 +49,7 @@ from .serializers import (
     HODReviewSerializer,
     DepartmentLogEntrySerializer, BulkTaskAssignSerializer
 )
+from .report_templates import build_suggested_reports_for_admission
 import qrcode
 import base64
 import io
@@ -880,6 +881,24 @@ class LabReportBulkSaveAPIView(APIView):
             many=True,
         ).data
         return Response(payload, status=status.HTTP_200_OK)
+
+
+class LabReportTemplateSuggestionsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, uhid, adm_no):
+        patient = get_object_or_404(Patient, uhid=uhid)
+        admission = get_object_or_404(Admission, patient=patient, admNo=adm_no)
+
+        suggested_reports = build_suggested_reports_for_admission(patient, admission)
+        return Response(
+            {
+                'patient': patient.uhid,
+                'admNo': admission.admNo,
+                'suggested_reports': suggested_reports,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class HODEmployeeListAPIView(APIView):
     def get(self, request):

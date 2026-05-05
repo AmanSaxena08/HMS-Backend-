@@ -147,7 +147,20 @@ def serialize_task_for_hod(task):
     }
 
 def get_task_queryset_for_user(user):
-    queryset = Task.objects.select_related('assigned_to', 'assigned_by', 'patient').order_by('-created_at')
+    queryset = (
+        Task.objects
+        .select_related('assigned_to', 'assigned_by', 'patient')
+        .prefetch_related(
+            'patient__admissions',
+            'patient__admissions__medicalHistory',
+            'patient__admissions__discharge',
+            'patient__admissions__services',
+            'patient__admissions__bills',
+            'patient__admissions__lab_reports',
+            'patient__admissions__pharmacy_records',
+        )
+        .order_by('-created_at')
+    )
     if user.role in ['superadmin', 'office_admin']:
         return queryset
     if user.role == 'admin':
@@ -1453,7 +1466,7 @@ class EmployeeMyTasksAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        tasks = Task.objects.filter(assigned_to=request.user)
+        tasks = get_task_queryset_for_user(request.user)
         
         # Sort logic: 
         # 1. Pending (Value 1) comes first, then everything else (Value 2)
@@ -1468,7 +1481,7 @@ class EmployeeMyTasksAPIView(APIView):
     )
 ).order_by('status_order', 'created_at')
 
-        serializer = TaskSerializer(tasks, many=True)
+        serializer = TaskSerializer(tasks, many=True, context={'request': request})
         return Response(serializer.data)
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.all().order_by('name')

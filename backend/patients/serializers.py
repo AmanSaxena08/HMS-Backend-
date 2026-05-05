@@ -1,3 +1,5 @@
+import datetime
+
 from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
@@ -20,6 +22,40 @@ from .models import (
     MedicineMaster,    
     PharmacyRecord,    
 )
+
+
+def get_preferred_admission_for_patient(patient):
+    if not patient:
+        return None
+
+    cached = getattr(patient, '_preferred_admission_cache', None)
+    if cached is not None:
+        return cached
+
+    prefetched = getattr(patient, '_prefetched_objects_cache', {}) or {}
+    admissions = prefetched.get('admissions')
+    if admissions is None:
+        admissions = list(patient.admissions.all())
+    else:
+        admissions = list(admissions)
+
+    if not admissions:
+        patient._preferred_admission_cache = None
+        return None
+
+    def is_active(admission):
+        discharge = getattr(admission, 'discharge', None)
+        return not getattr(discharge, 'dod', None)
+
+    def sort_key(admission):
+        timestamp = admission.dateTime.timestamp() if getattr(admission, 'dateTime', None) else 0
+        return (timestamp, admission.admNo or 0, admission.id or 0)
+
+    active_admissions = [admission for admission in admissions if is_active(admission)]
+    source = active_admissions or admissions
+    preferred = max(source, key=sort_key)
+    patient._preferred_admission_cache = preferred
+    return preferred
 class ServiceMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceMaster
@@ -191,10 +227,22 @@ class AdmissionSerializer(serializers.ModelSerializer):
 
 class PatientSerializer(serializers.ModelSerializer):
     admissions = AdmissionSerializer(many=True, read_only=True)
+    current_admission_no = serializers.SerializerMethodField()
+    current_admission_detail = serializers.SerializerMethodField()
 
     class Meta:
         model = Patient
         fields = '__all__'
+
+    def get_current_admission_no(self, obj):
+        admission = get_preferred_admission_for_patient(obj)
+        return admission.admNo if admission else None
+
+    def get_current_admission_detail(self, obj):
+        admission = get_preferred_admission_for_patient(obj)
+        if not admission:
+            return None
+        return AdmissionSerializer(admission, context=self.context).data
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -372,7 +420,10 @@ class PharmacyRecordSerializer(serializers.ModelSerializer):
 class TaskSerializer(serializers.ModelSerializer):
     patient_name = serializers.CharField(source='patient.patientName', read_only=True)
     patient_uhid = serializers.CharField(source='patient.uhid', read_only=True)
+    branch_location = serializers.CharField(source='patient.branch_location', read_only=True)
     patient_detail = PatientSerializer(source='patient', read_only=True)
+    admission_no = serializers.SerializerMethodField()
+    admission_detail = serializers.SerializerMethodField()
     patient_names = serializers.SerializerMethodField()
     patient_uhids = serializers.SerializerMethodField()
     assigned_to_name = serializers.SerializerMethodField()
@@ -395,6 +446,16 @@ class TaskSerializer(serializers.ModelSerializer):
 
     def get_patient_uhids(self, obj):
         return [obj.patient.uhid] if obj.patient else []
+
+    def get_admission_no(self, obj):
+        admission = get_preferred_admission_for_patient(obj.patient)
+        return admission.admNo if admission else None
+
+    def get_admission_detail(self, obj):
+        admission = get_preferred_admission_for_patient(obj.patient)
+        if not admission:
+            return None
+        return AdmissionSerializer(admission, context=self.context).data
 
     def get_assigned_to_name(self, obj):
         if not obj.assigned_to:

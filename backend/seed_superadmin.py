@@ -18,8 +18,8 @@ DEFAULTS = {
     "username": os.getenv("SEED_SUPERADMIN_USERNAME", "superadmin"),
     "password": os.getenv("SEED_SUPERADMIN_PASSWORD", "Super@123"),
     "email": os.getenv("SEED_SUPERADMIN_EMAIL", "gmy.healthcare@gmail.com"),
-    "first_name": os.getenv("SEED_SUPERADMIN_FIRST_NAME", "Main"),
-    "last_name": os.getenv("SEED_SUPERADMIN_LAST_NAME", "Yashi Kaushik"),
+    "first_name": os.getenv("SEED_SUPERADMIN_FIRST_NAME", "Yashi "),
+    "last_name": os.getenv("SEED_SUPERADMIN_LAST_NAME", "Kaushik"),
     "emp_id": os.getenv("SEED_SUPERADMIN_EMP_ID", "SUA-000001"),
     "phone_number": os.getenv("SEED_SUPERADMIN_PHONE", ""),
 }

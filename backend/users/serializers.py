@@ -113,7 +113,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
             if password != confirm_password:
                 raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
 
-        if role not in GLOBAL_ACCESS_ROLES and branch and branch not in branch_codes:
+        if role not in GLOBAL_ACCESS_ROLES and branch and branch not in branch_codes and not (branch == 'ALL' and role in {'office_admin', 'hod', 'billing', 'opd', 'intimation', 'query', 'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst', 'doctor'}):
             raise serializers.ValidationError({"branch": "Selected branch does not exist."})
 
         if self.instance is None:

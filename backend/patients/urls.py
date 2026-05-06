@@ -40,6 +40,7 @@ router.register(r'doctors', DoctorViewSet, basename='doctor')
 
 urlpatterns = [
     path('patients/<str:uhid>/admissions/<str:adm_no>/dynamic-summary/', DynamicDischargeSummaryView.as_view(), name='dynamic-summary'),
+    path('patients/pending_prints/', PatientViewSet.as_view({'get': 'pending_prints'}), name='patients-pending-prints'),
     path('', include(router.urls)),
     path('patients/<str:uhid>/admissions/<str:adm_no>/dynamic-summary/print/', PrintDischargeSummaryView.as_view(), name='print-summary'),
     path('hod/employees/', HODEmployeeListAPIView.as_view(), name='hod-employees'),

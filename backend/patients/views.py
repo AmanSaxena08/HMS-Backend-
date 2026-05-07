@@ -352,8 +352,7 @@ class PatientViewSet(viewsets.ModelViewSet):
 
         queryset = Patient.objects.all()
 
-        # 🌟 THE TASK FIX: Hide patients that already have active tasks in a specific department
-        # We check if the frontend is asking us to exclude assigned patients
+        # 🌟 THE TASK FIX: Only hides patients if the frontend explicitly asks (for the Assignment Modal)
         exclude_dept = self.request.query_params.get('exclude_active_tasks_for_dept')
         if exclude_dept:
             queryset = queryset.exclude(
@@ -361,22 +360,25 @@ class PatientViewSet(viewsets.ModelViewSet):
                 assigned_tasks__status__in=['Pending', 'In Progress']
             )
 
-        # 1. Super Admin & Office Admin see everything
+        # 1. 🌍 Super Admin & Office Admin: See EVERYTHING across ALL branches
         if user.role in ['superadmin', 'office_admin']:
             return queryset.order_by('-created_at')
-            
-        # 2. Branch Admin AND Receptionists see their branch's patients!
+
+        # 2. 🏥 Branch Admin & Receptionist: See ALL patients for THEIR branch
         elif user.role in ['admin', 'receptionist']:
             return queryset.filter(branch_location=user.branch).order_by('-created_at')
-            
-        # 3. HOD should be able to work on all patients for their branch.
-        # If HOD is configured with branch=ALL, allow cross-branch visibility.
-        elif user.role == 'hod':
-            if getattr(user, 'branch', None) in get_valid_branch_codes():
-                return queryset.filter(branch_location=user.branch).order_by('-created_at')
-            return queryset.order_by('-created_at')
 
-        # 4. Staff only see patients explicitly assigned to them via Task Manager
+        # 3. 👔 HOD: Sees ALL CASHLESS patients (all hospitals) + Tasks assigned to/by them
+        elif user.role == 'hod':
+            from django.db import models
+            return queryset.filter(
+                models.Q(assigned_tasks__assigned_to=user) | 
+                models.Q(assigned_tasks__assigned_by=user) |
+                models.Q(payMode__icontains='cashless') |
+                models.Q(admissions__bills__bill_type='CASHLESS')
+            ).distinct().order_by('-created_at')
+
+        # 4. 👩‍⚕️ Staff (Created by Office Admin/HOD): See ONLY patients explicitly assigned to them
         elif user.role in ['billing', 'opd', 'intimation', 'query', 'uploading', 'nursing', 'notes', 'medical_officer', 'quality_analyst']:
             return queryset.filter(assigned_tasks__assigned_to=user).distinct().order_by('-created_at')
 
@@ -888,11 +890,25 @@ class TaskDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
         return get_task_queryset_for_user(self.request.user)
 
     def perform_update(self, serializer):
+        user = self.request.user
+
+        # 🌟 THE BYPASS: If a regular employee is just clicking "Submit"
+        if user.role not in TASK_MANAGER_ROLES:
+            # Security check: Make sure they aren't trying to maliciously re-assign the task
+            if 'assigned_to' in serializer.validated_data or 'department' in serializer.validated_data or 'patient' in serializer.validated_data:
+                raise PermissionDenied("Employees cannot re-assign tasks or change departments.")
+            
+            # If they are just updating status (like "Completed") or adding notes, let it save!
+            serializer.save()
+            return
+
+        # 👔 THE MANAGER CHECK: If an Admin/HOD is editing, run the strict validation
         assigned_to = serializer.validated_data.get('assigned_to', serializer.instance.assigned_to)
         patient = serializer.validated_data.get('patient', serializer.instance.patient)
         department = serializer.validated_data.get('department', serializer.instance.department)
+        
         validate_generic_task_assignment(
-            self.request.user,
+            user,
             assigned_to,
             patient=patient,
             department=department,

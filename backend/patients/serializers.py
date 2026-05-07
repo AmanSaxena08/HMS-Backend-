@@ -128,7 +128,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         
-        # Your existing custom mappings for the frontend
+        # Custom mappings for the frontend
         data['title'] = data.get('svcName')
         data['type'] = data.get('svcCat')
         data['rate'] = data.get('svcRate')
@@ -137,15 +137,14 @@ class ServiceSerializer(serializers.ModelSerializer):
 
         request = self.context.get('request')
         
-        # 🌟 THE FIX: Define exactly who is allowed to see Cashless prices!
-        allowed_roles = ['superadmin', 'office_admin', 'admin', 'receptionist']
+        # 🌟 STRICT BUSINESS FLOW: ONLY Central Roles can see Cashless Money
+        allowed_roles = ['superadmin', 'office_admin']
         
         if request and getattr(request.user, 'role', '') not in allowed_roles:
             if getattr(instance, 'pricing_applied', 'CASH') == 'CASHLESS':
-                # Remove the database fields
+                # Remove all financial data for Branch Admins & Receptionists
                 data.pop('svcRate', None)
                 data.pop('svcTot', None)
-                # Remove the custom frontend mapped fields
                 data.pop('rate', None)
                 data.pop('total', None)
                 
@@ -191,12 +190,19 @@ class BillingSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         request = self.context.get('request')
 
-        if request and getattr(request.user, 'role', '') != 'office_admin':
+        # 🌟 STRICT BUSINESS FLOW: Protect Billing Totals too!
+        allowed_roles = ['superadmin', 'office_admin']
+
+        if request and getattr(request.user, 'role', '') not in allowed_roles:
             if getattr(instance, 'bill_type', 'CASH') == 'CASHLESS':
+                # Hide the financial totals & payments for Cashless bills from branch staff
                 data.pop('paymentMode', None)
                 data.pop('paidNow', None)
+                data.pop('discount', None)
+                data.pop('advance', None)
                 
         return data
+    
 class AdmissionSerializer(serializers.ModelSerializer):
     medicalHistory = MedicalHistorySerializer(read_only=True)
     discharge = DischargeSerializer(read_only=True)

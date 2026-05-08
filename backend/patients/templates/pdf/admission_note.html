@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<body>
+    {% include "pdf/header.html" %}
+
+    {% if medical %}
+        {% if medical.presentComplaints or medical.chiefComplaints %}
+        <div class="section">
+            <div class="section-title">Present Complaints</div>
+            {% if medical.presentComplaints %}
+                <div class="section-content"><strong>Present Complaints:</strong> {{ medical.presentComplaints }}</div>
+            {% endif %}
+            {% if medical.chiefComplaints %}
+                <div class="section-content" style="margin-top: 6px;"><strong>C/O (Chief Complaints):</strong> {{ medical.chiefComplaints }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if medical.bp or medical.pulse or medical.spo2 or medical.temp or medical.chest or medical.cvs or medical.cns or medical.pa %}
+        <div class="section">
+            <div class="section-title">Examinations / Vitals</div>
+            <table class="vitals-table">
+                <tr>
+                    <td><strong>BP:</strong> {{ medical.bp|default:"--" }}</td>
+                    <td><strong>PR:</strong> {{ medical.pulse|default:"--" }}</td>
+                    <td><strong>SPO2:</strong> {{ medical.spo2|default:"--" }}</td>
+                    <td><strong>TEMP:</strong> {{ medical.temp|default:"--" }}</td>
+                </tr>
+                <tr>
+                    <td><strong>Chest:</strong> {{ medical.chest|default:"--" }}</td>
+                    <td><strong>CVS:</strong> {{ medical.cvs|default:"--" }}</td>
+                    <td><strong>CNS:</strong> {{ medical.cns|default:"--" }}</td>
+                    <td><strong>P/A:</strong> {{ medical.pa|default:"--" }}</td>
+                </tr>
+            </table>
+        </div>
+        {% endif %}
+
+        {% if medical.investigations %}
+        <div class="section">
+            <div class="section-title">Investigations / Reports Ordered</div>
+            <div class="section-content">{{ medical.investigations }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.provisionalDiagnosis %}
+        <div class="section">
+            <div class="section-title">Provisional Diagnosis</div>
+            <div class="section-content">{{ medical.provisionalDiagnosis }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.treatingDoctor %}
+        <div class="section">
+            <div class="section-title">Treating Doctor</div>
+            <div class="section-content">{{ medical.treatingDoctor }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.notes %}
+        <div class="section">
+            <div class="section-title">Additional Notes</div>
+            <div class="section-content">{{ medical.notes }}</div>
+        </div>
+        {% endif %}
+
+    {% else %}
+        <div class="section">
+            <div class="section-content"><em>No admission note recorded for this admission.</em></div>
+        </div>
+    {% endif %}
+
+    <table class="footer-table">
+        <tr>
+            <td style="padding-top: 8px; font-size: 13px; text-transform: uppercase;">{{ consultant }}</td>
+            <td style="padding-top: 8px;">&nbsp;</td>
+        </tr>
+        <tr class="footer-row">
+            <td style="font-size: 11px; color: #333;">CONSULTANT DOCTOR</td>
+            <td style="font-size: 11px; color: #333;">RESIDENT MEDICAL OFFICER</td>
+        </tr>
+    </table>
+</body>
+</html>

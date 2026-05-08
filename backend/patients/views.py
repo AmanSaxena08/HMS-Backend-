@@ -403,7 +403,7 @@ class PatientViewSet(viewsets.ModelViewSet):
             print("🚨 AUTO-ADMISSION FAILED:", str(e))
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=['post'], url_path='new-admission')
+    @action(detail=True, methods=['post'], url_path='new_admission')
     def new_admission(self, request, uhid=None): 
         try:
             # 🌟 THE FIX: Fetch the patient manually using the UHID from the URL
@@ -540,6 +540,85 @@ class PatientViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'])
+    def request_print(self, request, uhid=None):
+        patient = self.get_object()
+        adm_no = (
+            request.data.get('admNo')
+            or request.data.get('adm_no')
+            or request.query_params.get('admNo')
+            or request.query_params.get('adm_no')
+        )
+
+        try:
+            if adm_no in [None, ""]:
+                admission = patient.admissions.order_by('-admNo').first()
+                if not admission:
+                    return Response({'error': 'No admission found for this patient.'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                admission = patient.admissions.get(admNo=int(adm_no))
+            billing_obj, _ = get_or_create_current_billing(admission)
+
+            if billing_obj.printStatus == 'APPROVED':
+                return Response({'status': 'Already approved'})
+
+            billing_obj.printStatus = 'PENDING'
+            billing_obj.printRequestedAt = timezone.now()
+            billing_obj.save()
+            return Response({'status': 'Print request sent to Branch Admin', 'admNo': admission.admNo})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def resolve_print(self, request, uhid=None):
+        role = getattr(request.user, 'role', '')
+        if role not in ['superadmin', 'office_admin', 'admin', 'branchadmin']:
+            return Response({'error': 'Only Branch Admin / Super Admin can approve print requests.'}, status=status.HTTP_403_FORBIDDEN)
+
+        patient = self.get_object()
+        adm_no = (
+            request.data.get('admNo')
+            or request.data.get('adm_no')
+            or request.query_params.get('admNo')
+            or request.query_params.get('adm_no')
+        )
+
+        action = request.data.get('action') or request.data.get('status') or request.data.get('backendAction') or 'APPROVED'
+        action = str(action).upper()
+        if action not in {'APPROVED', 'REJECTED', 'PENDING'}:
+            action = 'APPROVED'
+
+        try:
+            if role in ['admin', 'branchadmin'] and getattr(request.user, 'branch', None) and patient.branch_location != request.user.branch:
+                return Response({'error': 'You can only resolve print requests for your own branch.'}, status=status.HTTP_403_FORBIDDEN)
+            if adm_no in [None, ""]:
+                admission = patient.admissions.order_by('-admNo').first()
+                if not admission:
+                    return Response({'error': 'No admission found for this patient.'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                admission = patient.admissions.get(admNo=int(adm_no))
+            billing_obj, _ = get_or_create_current_billing(admission)
+            billing_obj.printStatus = action
+            billing_obj.save()
+
+            return Response({'status': f'Print request {action}'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'])
+    def pending_prints(self, request):
+        role = getattr(request.user, 'role', '')
+        if role not in ['superadmin', 'office_admin', 'admin', 'branchadmin']:
+            return Response({'error': 'Unauthorized access.'}, status=status.HTTP_403_FORBIDDEN)
+
+        pending_patients = Patient.objects.filter(admissions__bills__printStatus='PENDING')
+        if role in ['admin', 'branchadmin'] and getattr(request.user, 'branch', None):
+            pending_patients = pending_patients.filter(branch_location=request.user.branch)
+        pending_patients = pending_patients.distinct()
+
+        serializer = self.get_serializer(pending_patients, many=True)
+        return Response(serializer.data)
+
 class ServiceBulkSaveAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -602,10 +681,20 @@ class ServiceBulkSaveAPIView(APIView):
     @action(detail=True, methods=['post'])
     def request_print(self, request, uhid=None):
         patient = self.get_object()
-        adm_no = request.data.get('admNo')
+        adm_no = (
+            request.data.get('admNo')
+            or request.data.get('adm_no')
+            or request.query_params.get('admNo')
+            or request.query_params.get('adm_no')
+        )
         
         try:
-            admission = patient.admissions.get(admNo=adm_no)
+            if adm_no in [None, ""]:
+                admission = patient.admissions.order_by('-admNo').first()
+                if not admission:
+                    return Response({'error': 'No admission found for this patient.'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                admission = patient.admissions.get(admNo=int(adm_no))
             billing_obj, _ = get_or_create_current_billing(admission)
             
             # 🌟 SMART CHECK: Prevent resetting an already approved bill back to PENDING!
@@ -615,19 +704,38 @@ class ServiceBulkSaveAPIView(APIView):
             billing_obj.printStatus = 'PENDING'
             billing_obj.printRequestedAt = timezone.now()
             billing_obj.save()
-            return Response({'status': 'Print request sent to Super Admin'})
+            return Response({'status': 'Print request sent to Branch Admin', 'admNo': admission.admNo})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def resolve_print(self, request, uhid=None):
+        role = getattr(request.user, 'role', '')
+        if role not in ['superadmin', 'office_admin', 'admin', 'branchadmin']:
+            return Response({'error': 'Only Branch Admin / Super Admin can approve print requests.'}, status=status.HTTP_403_FORBIDDEN)
+
         patient = self.get_object()
-        adm_no = request.data.get('admNo')
+        adm_no = (
+            request.data.get('admNo')
+            or request.data.get('adm_no')
+            or request.query_params.get('admNo')
+            or request.query_params.get('adm_no')
+        )
         
         action = request.data.get('action') or request.data.get('status') or request.data.get('backendAction') or 'APPROVED'
+        action = str(action).upper()
+        if action not in {'APPROVED', 'REJECTED', 'PENDING'}:
+            action = 'APPROVED'
         
         try:
-            admission = patient.admissions.get(admNo=adm_no)
+            if role in ['admin', 'branchadmin'] and getattr(request.user, 'branch', None) and patient.branch_location != request.user.branch:
+                return Response({'error': 'You can only resolve print requests for your own branch.'}, status=status.HTTP_403_FORBIDDEN)
+            if adm_no in [None, ""]:
+                admission = patient.admissions.order_by('-admNo').first()
+                if not admission:
+                    return Response({'error': 'No admission found for this patient.'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                admission = patient.admissions.get(admNo=int(adm_no))
             billing_obj, _ = get_or_create_current_billing(admission)
             billing_obj.printStatus = action
             billing_obj.save()
@@ -638,7 +746,14 @@ class ServiceBulkSaveAPIView(APIView):
 
     @action(detail=False, methods=['get'])
     def pending_prints(self, request):
-        pending_patients = Patient.objects.filter(admissions__bills__printStatus='PENDING').distinct()
+        role = getattr(request.user, 'role', '')
+        if role not in ['superadmin', 'office_admin', 'admin', 'branchadmin']:
+            return Response({'error': 'Unauthorized access.'}, status=status.HTTP_403_FORBIDDEN)
+
+        pending_patients = Patient.objects.filter(admissions__bills__printStatus='PENDING')
+        if role in ['admin', 'branchadmin'] and getattr(request.user, 'branch', None):
+            pending_patients = pending_patients.filter(branch_location=request.user.branch)
+        pending_patients = pending_patients.distinct()
         
         serializer = self.get_serializer(pending_patients, many=True)
         return Response(serializer.data)
@@ -820,9 +935,146 @@ class PrintDischargeSummaryView(APIView):
             response = HttpResponse(result.getvalue(), content_type='application/pdf')
             response['Content-Disposition'] = f'inline; filename="{uhid}_summary.pdf"'
             return response
-            
+
         return Response({"error": "PDF Generation Failed"}, status=400)
-    
+
+
+def _build_patient_header_context(admission, summary_label):
+    patient = admission.patient
+    discharge = getattr(admission, 'discharge', None)
+    billing = admission.bills.order_by('-id').first()
+
+    age = "--"
+    if patient.dob:
+        calc_age = (timezone.now().date() - patient.dob).days // 365
+        age = f"{calc_age} YRS"
+
+    pay_mode_raw = (patient.payMode or "").strip().lower()
+    is_cashless = pay_mode_raw != "cash"
+
+    return {
+        "s": {"summary_type": summary_label},
+        "uhid": patient.uhid,
+        "ipd_no": admission.ipdNo or "--",
+        "patient_name": (patient.patientName or "").upper(),
+        "guardian_name": (patient.guardianName or "--").upper() if patient.guardianName else "--",
+        "address": patient.address or "--",
+        "consultant": (
+            discharge.doctorName.upper() if (discharge and discharge.doctorName)
+            else (
+                admission.medicalHistory.treatingDoctor.upper()
+                if hasattr(admission, 'medicalHistory') and admission.medicalHistory and admission.medicalHistory.treatingDoctor
+                else "--"
+            )
+        ),
+        "claim_id": patient.tpaPanelCardNo or "--",
+        "doa": admission.dateTime.strftime("%d-%m-%Y %H:%M HRS") if admission.dateTime else "--",
+        "dod": discharge.dod.strftime("%d-%m-%Y %H:%M HRS") if (discharge and discharge.dod) else "--",
+        "bill_no": f"{billing.id}/{admission.dateTime.strftime('%y')}" if (billing and admission.dateTime) else "--",
+        "bill_date": discharge.dod.strftime("%d-%m-%Y %H:%M HRS") if (discharge and discharge.dod) else "--",
+        "age_sex": f"{age} / {(patient.gender or '').upper()}",
+        "card_no": patient.tpaCard or "--",
+        "room": (f"{discharge.roomNo} / {discharge.wardName.upper()}" if (discharge and discharge.roomNo) else "-- / --"),
+        "panel": (patient.tpa.upper() if patient.tpa else (patient.payMode or "--").upper()),
+        "contact_no": patient.phone or "--",
+        "status_on_discharge": (discharge.dischargeStatus.upper() if (discharge and discharge.dischargeStatus) else "--"),
+        "is_cashless": is_cashless,
+        "patient": patient,
+        "admission": admission,
+        "discharge": discharge,
+    }
+
+
+def _render_pdf(template_file, context, filename_suffix, uhid):
+    html_string = render_to_string(template_file, context)
+    result = io.BytesIO()
+    pdf = pisa.pisaDocument(io.BytesIO(html_string.encode("UTF-8")), result)
+    if pdf.err:
+        return Response({"error": "PDF Generation Failed"}, status=status.HTTP_400_BAD_REQUEST)
+    response = HttpResponse(result.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'inline; filename="{uhid}_{filename_suffix}.pdf"'
+    return response
+
+
+class PrintAdmissionNoteView(APIView):
+    permission_classes = []
+
+    def get(self, request, uhid, adm_no):
+        admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
+        ctx = _build_patient_header_context(admission, "ADMISSION NOTE")
+        ctx["medical"] = getattr(admission, 'medicalHistory', None)
+        return _render_pdf("pdf/admission_note.html", ctx, "admission_note", uhid)
+
+
+class PrintMedicalHistoryView(APIView):
+    permission_classes = []
+
+    def get(self, request, uhid, adm_no):
+        admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
+        ctx = _build_patient_header_context(admission, "MEDICAL HISTORY")
+        ctx["medical"] = getattr(admission, 'medicalHistory', None)
+        return _render_pdf("pdf/medical_history.html", ctx, "medical_history", uhid)
+
+
+class PrintLabReportsView(APIView):
+    permission_classes = []
+
+    def get(self, request, uhid, adm_no):
+        admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
+        ctx = _build_patient_header_context(admission, "LAB / RADIOLOGY REPORTS")
+        reports = list(admission.lab_reports.all().order_by('report_date', 'id'))
+        report_rows = []
+        total_amount = Decimal("0.00")
+        for rep in reports:
+            md = rep.modality_details if isinstance(rep.modality_details, dict) else {}
+            report_rows.append({
+                "report_name": rep.report_name or "Report",
+                "report_type": rep.report_type or "",
+                "report_category": rep.report_category or "",
+                "report_date": rep.report_date.strftime("%d-%m-%Y") if rep.report_date else "--",
+                "ordered_by": rep.ordered_by or "--",
+                "amount": rep.amount or Decimal("0.00"),
+                "remarks": rep.remarks or "",
+                "findings": md.get("findings", ""),
+                "impression": md.get("impression", ""),
+                "tests": rep.table_data if isinstance(rep.table_data, list) else [],
+            })
+            try:
+                total_amount += Decimal(str(rep.amount or 0))
+            except (InvalidOperation, TypeError):
+                pass
+        ctx["reports"] = report_rows
+        ctx["total_amount"] = f"{total_amount:,.2f}"
+        return _render_pdf("pdf/lab_reports.html", ctx, "lab_reports", uhid)
+
+
+class PrintPharmacyRecordsView(APIView):
+    permission_classes = []
+
+    def get(self, request, uhid, adm_no):
+        admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
+        ctx = _build_patient_header_context(admission, "PHARMACY / MEDICINE BILL")
+        records = list(admission.pharmacy_records.all().order_by('id'))
+        rows = []
+        total_amount = Decimal("0.00")
+        for rec in records:
+            qty = Decimal(str(rec.quantity or 0))
+            rate = Decimal(str(rec.rate or 0))
+            line_total = qty * rate
+            rows.append({
+                "medicine_name": rec.medicine_name or "Medicine",
+                "date_given": rec.date_given or "--",
+                "quantity": int(rec.quantity or 0),
+                "rate": rate,
+                "amount": line_total,
+                "batch_no": rec.batch_no or "--",
+                "expiry_date": rec.expiry_date or "--",
+            })
+            total_amount += line_total
+        ctx["medicines"] = rows
+        ctx["total_amount"] = f"{total_amount:,.2f}"
+        return _render_pdf("pdf/pharmacy_records.html", ctx, "pharmacy_records", uhid)
+
 class TaskReportAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1539,6 +1791,9 @@ class BulkTaskAssignAPIView(APIView):
             patient_ids = serializer.validated_data['patient_ids']
             department = serializer.validated_data['department']
             title = serializer.validated_data.get('title', 'Patient Task')
+            priority = serializer.validated_data.get('priority', 'Medium')
+            notes = serializer.validated_data.get('notes', '')
+            due_date = serializer.validated_data.get('due_date')
 
             try:
                 assigned_to_user = CustomUser.objects.get(id=assign_to_id)
@@ -1567,11 +1822,14 @@ class BulkTaskAssignAPIView(APIView):
                     tasks_to_create.append(
                         Task(
                             title=title,
+                            description=notes,
                             assigned_by=request.user,
                             assigned_to=assigned_to_user,
                             department=department,
                             patient=patient,
-                            status='Pending'
+                            status='Pending',
+                            priority=priority,
+                            due_date=due_date,
                         )
                     )
                 except ValidationError as exc:
@@ -1804,3 +2062,29 @@ class PrintBillView(APIView):
             return response
             
         return Response({"error": "PDF Generation Failed"}, status=status.HTTP_400_BAD_REQUEST)
+
+class AdminDashboardStatsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # 1. Security: Only Admins can see this dashboard data
+        if user.role not in ['superadmin', 'office_admin', 'admin']:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        today = timezone.now().date()
+        
+        # 2. Get all discharges where the Date of Discharge (dod) is today
+        todays_discharges = Discharge.objects.filter(dod__date=today)
+
+        # 3. If it's a Branch Admin, strictly filter to ONLY show their branch!
+        if user.role == 'admin':
+            todays_discharges = todays_discharges.filter(admission__patient__branch_location=user.branch)
+
+        # 4. Return the exact count to the frontend
+        return Response({
+            "todaysDischargeCount": todays_discharges.count(),
+            # 💡 Pro-tip: You can easily add more stats here later! 
+            # Example: "totalPatients": Patient.objects.filter(branch_location=user.branch).count()
+        }, status=status.HTTP_200_OK)

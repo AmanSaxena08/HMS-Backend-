@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<body>
+    {% include "pdf/header.html" %}
+
+    {% if medical %}
+        {% if medical.previousDiagnosis %}
+        <div class="section">
+            <div class="section-title">Past History / Previous Diagnosis</div>
+            <div class="section-content">{{ medical.previousDiagnosis }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.pastSurgeries %}
+        <div class="section">
+            <div class="section-title">Past Surgeries</div>
+            <div class="section-content">{{ medical.pastSurgeries }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.currentMedications %}
+        <div class="section">
+            <div class="section-title">Current Medications</div>
+            <div class="section-content">{{ medical.currentMedications }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.knownAllergies or medical.chronicConditions %}
+        <div class="section">
+            <div class="section-title">Allergies & Chronic Conditions</div>
+            {% if medical.knownAllergies %}
+                <div class="section-content"><strong>Known Allergies:</strong> {{ medical.knownAllergies }}</div>
+            {% endif %}
+            {% if medical.chronicConditions %}
+                <div class="section-content" style="margin-top: 6px;"><strong>Chronic Conditions:</strong> {{ medical.chronicConditions }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if medical.familyHistory %}
+        <div class="section">
+            <div class="section-title">Family History</div>
+            <div class="section-content">{{ medical.familyHistory }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.smokingStatus or medical.alcoholUse %}
+        <div class="section">
+            <div class="section-title">Lifestyle</div>
+            <table class="vitals-table">
+                <tr>
+                    <td><strong>Smoking Status:</strong> {{ medical.smokingStatus|default:"--" }}</td>
+                    <td><strong>Alcohol Use:</strong> {{ medical.alcoholUse|default:"--" }}</td>
+                </tr>
+            </table>
+        </div>
+        {% endif %}
+
+        {% if medical.treatingDoctor %}
+        <div class="section">
+            <div class="section-title">Treating Doctor</div>
+            <div class="section-content">{{ medical.treatingDoctor }}</div>
+        </div>
+        {% endif %}
+
+        {% if medical.notes %}
+        <div class="section">
+            <div class="section-title">Additional Notes</div>
+            <div class="section-content">{{ medical.notes }}</div>
+        </div>
+        {% endif %}
+    {% else %}
+        <div class="section">
+            <div class="section-content"><em>No medical history recorded for this admission.</em></div>
+        </div>
+    {% endif %}
+
+    <table class="footer-table">
+        <tr>
+            <td style="padding-top: 8px; font-size: 13px; text-transform: uppercase;">{{ consultant }}</td>
+            <td style="padding-top: 8px;">&nbsp;</td>
+        </tr>
+        <tr class="footer-row">
+            <td style="font-size: 11px; color: #333;">CONSULTANT DOCTOR</td>
+            <td style="font-size: 11px; color: #333;">RESIDENT MEDICAL OFFICER</td>
+        </tr>
+    </table>
+</body>
+</html>

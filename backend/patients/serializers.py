@@ -1,5 +1,5 @@
 import datetime
-
+import re 
 from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
@@ -279,6 +279,28 @@ class PatientSerializer(serializers.ModelSerializer):
                 resource_data[field] = None
                 
         return super().to_internal_value(resource_data)
+    
+    def validate_phone(self, value):
+        if not value:
+            raise serializers.ValidationError("Phone number is required.")
+        digits_only = re.sub(r'\D', '', value)
+        if not value.replace('+','').replace('-','').replace(' ','').isdigit():
+            raise serializers.ValidationError("Phone can only contain digits.")
+        if len(digits_only) < 10:
+            raise serializers.ValidationError("Phone number must be at least 10 digits.")
+        return value
+
+def validate_patientName(self, value):
+    if not value or not value.strip():
+        raise serializers.ValidationError("Patient name is required.")
+    if re.search(r'\d', value):
+        raise serializers.ValidationError("Patient name cannot contain numbers.")
+    return value.strip()
+
+def validate_guardianName(self, value):
+    if value and re.search(r'\d', value):
+        raise serializers.ValidationError("Guardian name cannot contain numbers.")
+    return value
 
     def validate(self, data):
         current_patient_id = self.instance.id if self.instance else None
@@ -401,6 +423,26 @@ class PharmacyRecordSerializer(serializers.ModelSerializer):
         model = PharmacyRecord
         fields = '__all__'
         read_only_fields = ['patient', 'admission', 'created_by', 'created_at']
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict):
+            return super().to_internal_value(data)
+        resource_data = {**data}
+        if 'date' in resource_data and 'date_given' not in resource_data:
+            resource_data['date_given'] = resource_data.pop('date')
+        if 'name' in resource_data and 'medicine_name' not in resource_data:
+            resource_data['medicine_name'] = resource_data.pop('name')
+        if 'batch' in resource_data and 'batch_no' not in resource_data:
+            resource_data['batch_no'] = resource_data.pop('batch')
+        if 'expiry' in resource_data and 'expiry_date' not in resource_data:
+            resource_data['expiry_date'] = resource_data.pop('expiry')
+        if resource_data.get('item') and not resource_data.get('medicine_name'):
+            resource_data['medicine_name'] = resource_data.pop('item')
+        elif 'item' in resource_data:
+            resource_data.pop('item', None)
+        if not str(resource_data.get('date_given') or '').strip():
+            resource_data['date_given'] = timezone.localdate().isoformat()
+        return super().to_internal_value(resource_data)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -548,6 +590,9 @@ class BulkTaskAssignSerializer(serializers.Serializer):
     
     department = serializers.CharField(max_length=100)
     title = serializers.CharField(max_length=255, required=False, default="Patient Billing Task")
+    priority = serializers.CharField(max_length=20, required=False, default="Medium")
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    due_date = serializers.DateTimeField(required=False, allow_null=True)
 
     def validate(self, attrs):
         # Consolidate keys so the View knows exactly what to do

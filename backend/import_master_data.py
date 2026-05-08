@@ -10,7 +10,7 @@ from patients.models import MedicineMaster, ReportMaster
 
 def import_data():
     # Pointing exactly to your Excel file in the data folder
-    excel_file_path = r"C:\Projects\backend-hms\backend\data\medicine_report.xlsx"
+    excel_file_path = os.path.join(os.path.dirname(__file__), "data", "medicine_report.xlsx")
     
     print("--- Starting Medicine Import ---")
     MedicineMaster.objects.all().delete()

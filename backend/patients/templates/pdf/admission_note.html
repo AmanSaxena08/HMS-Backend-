@@ -1,84 +1,192 @@
 <!DOCTYPE html>
 <html>
+<head>
+    <meta charset="utf-8">
+    <title>Admission Note - {{ patient_name }}</title>
+    <style>
+        @page { size: A4 portrait; margin: 1cm; }
+        body { font-family: Helvetica, sans-serif; font-size: 11px; color: #000; margin: 0; padding: 0; }
+
+        /* ── Hospital Header ── */
+        .top-header { width: 100%; border-collapse: collapse; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 12px; }
+
+        /* ── Title ── */
+        .doc-title { text-align: center; font-size: 15px; font-weight: bold; letter-spacing: 3px; text-decoration: underline; text-transform: uppercase; margin-bottom: 10px; }
+
+        /* ── Patient info strip ── */
+        .patient-strip { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 11px; }
+        .patient-strip td { padding: 2px 4px; }
+
+        /* ── 4-quadrant grid ── */
+        .quad-table { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+        .quad-table td {
+            border: 1px solid #000;
+            padding: 7px 9px;
+            vertical-align: top;
+            width: 50%;
+            min-height: 90px;
+        }
+        .cell-label { font-weight: bold; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
+        .cell-value { font-size: 11px; white-space: pre-wrap; line-height: 1.45; min-height: 70px; }
+
+        /* ── Examinations (full-width) ── */
+        .exam-table { width: 100%; border-collapse: collapse; border-top: none; }
+        .exam-table td { border: 1px solid #000; padding: 7px 9px; vertical-align: top; }
+        .vitals-grid { display: table; width: 100%; }
+        .vitals-col { display: table-cell; width: 50%; vertical-align: top; }
+        .vital-row { font-size: 11px; line-height: 1.75; }
+        .vital-row strong { display: inline-block; min-width: 52px; }
+
+        /* ── Diagnosis (full-width) ── */
+        .diag-table { width: 100%; border-collapse: collapse; border-top: none; }
+        .diag-table td { border: 1px solid #000; padding: 7px 9px; vertical-align: top; min-height: 50px; }
+
+        /* ── Footer ── */
+        .footer-table { width: 100%; border-collapse: collapse; margin-top: 48px; font-size: 11px; }
+        .footer-table td { width: 33.33%; text-align: center; vertical-align: bottom; padding-top: 5px; }
+        .sig-line { border-top: 1px solid #000; padding-top: 4px; font-weight: bold; font-size: 11px; display: inline-block; width: 80%; }
+        .sig-sub { font-size: 10px; color: #444; margin-top: 2px; }
+    </style>
+</head>
 <body>
-    {% include "pdf/header.html" %}
 
-    {% if medical %}
-        {% if medical.presentComplaints or medical.chiefComplaints %}
-        <div class="section">
-            <div class="section-title">Present Complaints</div>
-            {% if medical.presentComplaints %}
-                <div class="section-content"><strong>Present Complaints:</strong> {{ medical.presentComplaints }}</div>
-            {% endif %}
-            {% if medical.chiefComplaints %}
-                <div class="section-content" style="margin-top: 6px;"><strong>C/O (Chief Complaints):</strong> {{ medical.chiefComplaints }}</div>
-            {% endif %}
-        </div>
-        {% endif %}
-
-        {% if medical.bp or medical.pulse or medical.spo2 or medical.temp or medical.chest or medical.cvs or medical.cns or medical.pa %}
-        <div class="section">
-            <div class="section-title">Examinations / Vitals</div>
-            <table class="vitals-table">
-                <tr>
-                    <td><strong>BP:</strong> {{ medical.bp|default:"--" }}</td>
-                    <td><strong>PR:</strong> {{ medical.pulse|default:"--" }}</td>
-                    <td><strong>SPO2:</strong> {{ medical.spo2|default:"--" }}</td>
-                    <td><strong>TEMP:</strong> {{ medical.temp|default:"--" }}</td>
-                </tr>
-                <tr>
-                    <td><strong>Chest:</strong> {{ medical.chest|default:"--" }}</td>
-                    <td><strong>CVS:</strong> {{ medical.cvs|default:"--" }}</td>
-                    <td><strong>CNS:</strong> {{ medical.cns|default:"--" }}</td>
-                    <td><strong>P/A:</strong> {{ medical.pa|default:"--" }}</td>
-                </tr>
-            </table>
-        </div>
-        {% endif %}
-
-        {% if medical.investigations %}
-        <div class="section">
-            <div class="section-title">Investigations / Reports Ordered</div>
-            <div class="section-content">{{ medical.investigations }}</div>
-        </div>
-        {% endif %}
-
-        {% if medical.provisionalDiagnosis %}
-        <div class="section">
-            <div class="section-title">Provisional Diagnosis</div>
-            <div class="section-content">{{ medical.provisionalDiagnosis }}</div>
-        </div>
-        {% endif %}
-
-        {% if medical.treatingDoctor %}
-        <div class="section">
-            <div class="section-title">Treating Doctor</div>
-            <div class="section-content">{{ medical.treatingDoctor }}</div>
-        </div>
-        {% endif %}
-
-        {% if medical.notes %}
-        <div class="section">
-            <div class="section-title">Additional Notes</div>
-            <div class="section-content">{{ medical.notes }}</div>
-        </div>
-        {% endif %}
-
-    {% else %}
-        <div class="section">
-            <div class="section-content"><em>No admission note recorded for this admission.</em></div>
-        </div>
-    {% endif %}
-
-    <table class="footer-table">
+    <!-- ===== HOSPITAL HEADER ===== -->
+    <table class="top-header">
         <tr>
-            <td style="padding-top: 8px; font-size: 13px; text-transform: uppercase;">{{ consultant }}</td>
-            <td style="padding-top: 8px;">&nbsp;</td>
-        </tr>
-        <tr class="footer-row">
-            <td style="font-size: 11px; color: #333;">CONSULTANT DOCTOR</td>
-            <td style="font-size: 11px; color: #333;">RESIDENT MEDICAL OFFICER</td>
+            <!-- LEFT: Logo -->
+            <td style="width: 80px; vertical-align: middle; padding: 4px 0;">
+                {% if logo_base64 %}
+                <img src="data:image/png;base64,{{ logo_base64 }}" style="width: 70px; height: auto;">
+                {% endif %}
+            </td>
+
+            <!-- CENTRE: Hospital name -->
+            <td style="vertical-align: middle; text-align: left; padding-left: 10px;">
+                <div style="font-size: 26px; font-weight: 900; letter-spacing: 2px; line-height: 1; color: #1e3a8a;">
+                    SANG<span style="color: #e53e3e;">i</span>
+                </div>
+                <div style="font-size: 12px; font-weight: bold; letter-spacing: 4px; color: #1e3a8a; margin-top: -1px;">
+                    HOSPITAL
+                </div>
+            </td>
+
+            <!-- RIGHT: Address block -->
+            <td style="text-align: right; vertical-align: middle; font-size: 9.5px; color: #333; line-height: 1.65; padding: 4px 0;">
+                Add.: {{ hospital.address }}<br>
+                Ph.: {{ hospital.phone }}<br>
+                Email: {{ hospital.email }}<br>
+                Web.: {{ hospital.website }}
+            </td>
         </tr>
     </table>
+    <!-- ===== END HEADER ===== -->
+
+    <!-- ===== TITLE ===== -->
+    <div class="doc-title">Admission Note</div>
+
+    <!-- ===== PATIENT INFO STRIP ===== -->
+    <table class="patient-strip">
+        <tr>
+            <td><strong>Name of the Patient:</strong> {{ patient_name }}</td>
+            <td><strong>Age/Sex:</strong> {{ age_sex }}</td>
+            <td><strong>IPD NO:</strong> {{ ipd_no }}</td>
+        </tr>
+        <tr>
+            <td><strong>Card No:</strong> {{ card_no }}</td>
+            <td><strong>WARD/Bed NO:</strong> {{ ward_bed }}</td>
+            <td><strong>Date:</strong> {{ admission_date }}</td>
+        </tr>
+    </table>
+
+    <!-- ===== 4-QUADRANT GRID ===== -->
+    <table class="quad-table">
+        <tr>
+            <!-- TOP-LEFT: Present Complaints + C/O -->
+            <td>
+                <div class="cell-label">Present Complaints-</div>
+                <div class="cell-value">{{ present_complaints|default:"" }}</div>
+                <br>
+                <div class="cell-label">C/O-</div>
+                <div class="cell-value">{{ chief_complaints|default:"" }}</div>
+            </td>
+            <!-- TOP-RIGHT: Investigations -->
+            <td>
+                <div class="cell-label">Investigations-</div>
+                <div class="cell-value">{{ investigations|default:"" }}</div>
+            </td>
+        </tr>
+        <tr>
+            <!-- BOTTOM-LEFT: Past History -->
+            <td>
+                <div class="cell-label">Past History-</div>
+                <div class="cell-value">{{ past_history|default:"" }}</div>
+            </td>
+            <!-- BOTTOM-RIGHT: Treatment Advised -->
+            <td>
+                <div class="cell-label">Treatment Advised-</div>
+                <div class="cell-value">{{ treatment_advised|default:"" }}</div>
+            </td>
+        </tr>
+    </table>
+
+    <!-- ===== EXAMINATIONS (full width) ===== -->
+    <table class="exam-table">
+        <tr>
+            <td>
+                <div class="cell-label" style="margin-bottom: 6px;">Examinations-</div>
+                <div class="vitals-grid">
+                    <!-- Left column of vitals -->
+                    <div class="vitals-col">
+                        <div class="vital-row"><strong>BP=</strong> {{ bp|default:"" }}</div>
+                        <div class="vital-row"><strong>PR=</strong> {{ pr|default:"" }}</div>
+                        <div class="vital-row"><strong>SPO2=</strong> {{ spo2|default:"" }}</div>
+                        <div class="vital-row"><strong>TEMP=</strong> {{ temp|default:"" }}</div>
+                    </div>
+                    <!-- Right column of vitals -->
+                    <div class="vitals-col">
+                        <div class="vital-row"><strong>Chest:</strong> {{ chest|default:"" }}</div>
+                        <div class="vital-row"><strong>CVS:</strong> {{ cvs|default:"" }}</div>
+                        <div class="vital-row"><strong>CNS:</strong> {{ cns|default:"" }}</div>
+                        <div class="vital-row"><strong>P/A:</strong> {{ pa|default:"" }}</div>
+                    </div>
+                </div>
+            </td>
+        </tr>
+    </table>
+
+    <!-- ===== PROVISIONAL DIAGNOSIS (full width) ===== -->
+    <table class="diag-table">
+        <tr>
+            <td>
+                <div class="cell-label" style="margin-bottom: 4px;">Provisional Diagnosis-</div>
+                <div class="cell-value">{{ provisional_diagnosis|default:"" }}</div>
+            </td>
+        </tr>
+    </table>
+
+    <!-- ===== FOOTER SIGNATURES ===== -->
+    <table class="footer-table">
+        <tr>
+            <!-- LEFT: Adv. doctor -->
+            <td>
+                <br><br><br>
+                <span class="sig-line">Adv.</span><br>
+                <div class="sig-sub">{{ treating_doctor|default:"" }}</div>
+            </td>
+            <!-- CENTRE: Consultant -->
+            <td>
+                <br><br><br>
+                <span class="sig-line">Consultant</span><br>
+                <div class="sig-sub">&nbsp;</div>
+            </td>
+            <!-- RIGHT: Doctor Signature -->
+            <td>
+                <br><br><br>
+                <span class="sig-line">Doctor Signature</span><br>
+                <div class="sig-sub">&nbsp;</div>
+            </td>
+        </tr>
+    </table>
+
 </body>
 </html>

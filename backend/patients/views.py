@@ -2157,3 +2157,111 @@ class AdminDashboardStatsAPIView(APIView):
             # 💡 Pro-tip: You can easily add more stats here later! 
             # Example: "totalPatients": Patient.objects.filter(branch_location=user.branch).count()
         }, status=status.HTTP_200_OK)
+
+class PrintAdmissionNoteView(APIView):
+    # Remove this line once you add token auth to the frontend call:
+    permission_classes = []
+ 
+    def get(self, request, uhid, adm_no):
+        # ── 1. Fetch core objects ──────────────────────────────────────────
+        admission  = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
+        patient    = admission.patient
+        discharge  = getattr(admission, 'discharge', None)
+        med_hist   = getattr(admission, 'medicalHistory', None)
+ 
+        # ── 2. Calculate age ──────────────────────────────────────────────
+        age = "--"
+        if patient.dob:
+            age = f"{(timezone.now().date() - patient.dob).days // 365} YRS"
+ 
+        # ── 3. Hospital settings + logo (same pattern as PrintBillView) ───
+        settings_obj = HospitalSettings.objects.filter(branch=patient.branch_location).first()
+        if not settings_obj:
+            settings_obj = HospitalSettings.objects.first()
+ 
+        logo_base64 = ""
+        # Try uploaded logo first
+        if settings_obj and settings_obj.logo and hasattr(settings_obj.logo, 'path'):
+            if os.path.exists(settings_obj.logo.path):
+                with open(settings_obj.logo.path, "rb") as f:
+                    logo_base64 = base64.b64encode(f.read()).decode("utf-8")
+        # Fallback to static/logo.png
+        if not logo_base64:
+            logo_path = os.path.join(settings.BASE_DIR, 'static', 'logo.png')
+            if os.path.exists(logo_path):
+                with open(logo_path, "rb") as f:
+                    logo_base64 = base64.b64encode(f.read()).decode("utf-8")
+ 
+        # ── 4. Ward / Bed ─────────────────────────────────────────────────
+        ward_parts = []
+        if discharge and discharge.wardName:
+            ward_parts.append(discharge.wardName.upper())
+        if discharge and discharge.bedNo:
+            ward_parts.append(discharge.bedNo)
+        ward_bed = " / ".join(ward_parts) if ward_parts else "--"
+ 
+        # ── 5. Card no (TPA card or payMode) ─────────────────────────────
+        card_no = patient.tpaCard or patient.tpaPanelCardNo or "--"
+ 
+        # ── 6. Past history — combine previousDiagnosis + pastSurgeries ──
+        past_parts = []
+        if med_hist:
+            if med_hist.previousDiagnosis:
+                past_parts.append(med_hist.previousDiagnosis.strip())
+            if med_hist.pastSurgeries:
+                past_parts.append(med_hist.pastSurgeries.strip())
+        past_history = "\n".join(past_parts) if past_parts else ""
+ 
+        # ── 7. Build template context ─────────────────────────────────────
+        context = {
+            # Hospital
+            "hospital":       settings_obj,
+            "logo_base64":    logo_base64,
+ 
+            # Patient basics
+            "patient_name":   patient.patientName.upper(),
+            "age_sex":        f"{age} / {patient.gender.upper()}",
+            "ipd_no":         admission.ipdNo or "--",
+            "card_no":        card_no,
+            "ward_bed":       ward_bed,
+            "admission_date": timezone.localtime(admission.dateTime).strftime("%d/%m/%Y AT %I:%M HRS")
+                              if admission.dateTime else "--",
+ 
+            # Medical history fields
+            "present_complaints":  med_hist.presentComplaints  if med_hist else "",
+            "chief_complaints":    med_hist.chiefComplaints     if med_hist else "",
+            "investigations":      med_hist.investigations      if med_hist else "",
+            "past_history":        past_history,
+            "treatment_advised":   med_hist.treatmentAdvised    if med_hist else "",
+ 
+            # Vitals
+            "bp":   med_hist.bp    if med_hist else "",
+            "pr":   med_hist.pr or (med_hist.pulse if med_hist else ""),
+            "spo2": med_hist.spo2  if med_hist else "",
+            "temp": med_hist.temp  if med_hist else "",
+            "chest":med_hist.chest if med_hist else "",
+            "cvs":  med_hist.cvs   if med_hist else "",
+            "cns":  med_hist.cns   if med_hist else "",
+            "pa":   med_hist.pa    if med_hist else "",
+ 
+            # Diagnosis & doctor
+            "provisional_diagnosis": med_hist.provisionalDiagnosis if med_hist else "",
+            "treating_doctor":       (
+                med_hist.treatingDoctor if (med_hist and med_hist.treatingDoctor)
+                else (discharge.doctorName if discharge and discharge.doctorName else "--")
+            ),
+        }
+ 
+        # ── 8. Render → PDF ───────────────────────────────────────────────
+        html_string = render_to_string("pdf/admission_note.html", context)
+        result = io.BytesIO()
+        pdf = pisa.pisaDocument(io.BytesIO(html_string.encode("UTF-8")), result)
+ 
+        if not pdf.err:
+            response = HttpResponse(result.getvalue(), content_type='application/pdf')
+            response['Content-Disposition'] = (
+                f'inline; filename="{patient.uhid}_adm{adm_no}_admission_note.pdf"'
+            )
+            return response
+ 
+        return Response({"error": "PDF Generation Failed"}, status=400)

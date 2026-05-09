@@ -48,6 +48,9 @@ INSTALLED_APPS = [
     'core',
     'users',
     'patients',
+    'tasks',
+    'reports',
+    'master',
 ]
 
 MIDDLEWARE = [

@@ -21,4 +21,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('patients.urls')), # This creates the /api/patients/ endpoint
     path('api/users/', include('users.urls')),
+    path('api/', include('patients.urls')),
+    path('api/', include('tasks.urls')),
+    path('api/', include('reports.urls')),
+    path('api/', include('master.urls')),
 ]

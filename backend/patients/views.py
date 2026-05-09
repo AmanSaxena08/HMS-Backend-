@@ -278,7 +278,9 @@ def get_or_create_current_billing(admission):
     billing = admission.bills.order_by('-id').first()
     if billing:
         return billing, False
-    return Billing.objects.create(admission=admission), True
+    pay_mode = str(getattr(admission.patient, 'payMode', '') or '').lower()
+    initial_bill_type = 'CASHLESS' if 'cashless' in pay_mode else 'CASH'
+    return Billing.objects.create(admission=admission, bill_type=initial_bill_type), True
 
 def normalize_service_pricing(service_data, patient=None):
     raw_pricing = str(
@@ -358,9 +360,21 @@ class PatientViewSet(viewsets.ModelViewSet):
                 assigned_tasks__status__in=['Pending', 'In Progress']
             )
 
-        # 1. 🌍 Super Admin & Office Admin: See EVERYTHING across ALL branches
-        if user.role in ['superadmin', 'office_admin']:
+        # 1a. Super Admin: Sees everything
+        if user.role == 'superadmin':
             return queryset.order_by('-created_at')
+
+        # 1b. Office Admin: Sees ONLY cashless patients from ALL branches
+        elif user.role == 'office_admin':
+            from django.db.models import Exists, OuterRef
+            cashless_bill = Billing.objects.filter(
+                admission__patient=OuterRef('pk'),
+                bill_type='CASHLESS'
+            )
+            return queryset.filter(
+                models.Q(payMode__icontains='cashless') |
+                models.Q(Exists(cashless_bill))
+            ).order_by('-created_at')
 
         # 2. 🏥 Branch Admin & Receptionist: See ALL patients for THEIR branch
         elif user.role in ['admin', 'receptionist']:
@@ -368,12 +382,16 @@ class PatientViewSet(viewsets.ModelViewSet):
 
         # 3. 👔 HOD: Sees ALL CASHLESS patients (all hospitals) + Tasks assigned to/by them
         elif user.role == 'hod':
-            from django.db import models
+            from django.db.models import Exists, OuterRef
+            cashless_bill = Billing.objects.filter(
+                admission__patient=OuterRef('pk'),
+                bill_type='CASHLESS'
+            )
             return queryset.filter(
-                models.Q(assigned_tasks__assigned_to=user) | 
+                models.Q(assigned_tasks__assigned_to=user) |
                 models.Q(assigned_tasks__assigned_by=user) |
                 models.Q(payMode__icontains='cashless') |
-                models.Q(admissions__bills__bill_type='CASHLESS')
+                models.Q(Exists(cashless_bill))
             ).distinct().order_by('-created_at')
 
         # 4. 👩‍⚕️ Staff (Created by Office Admin/HOD): See ONLY patients explicitly assigned to them

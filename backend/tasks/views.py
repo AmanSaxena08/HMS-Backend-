@@ -1,18 +1,39 @@
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404
+from django.db import transaction
+from django.db.models import Count, Q, Case, When, Value, IntegerField
+from django.utils import timezone
+from django.conf import settings
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from django.db.models import Count, Q, Case, When, Value, IntegerField
-from django.shortcuts import get_object_or_404
-from django.utils import timezone
-from django.conf import settings
 from users import permissions
+from users.models import CustomUser
 from patients.models import Patient, Admission
 from .models import Task, HODReview, DepartmentLogEntry
 from .serializers import TaskSerializer, BulkTaskAssignSerializer, HODReviewSerializer, DepartmentLogEntrySerializer
-from users.models import CustomUser
+from core.utils import (
+    get_task_queryset_for_user,
+    validate_generic_task_assignment,
+    get_valid_branch_codes,
+    get_department_role,
+    get_allowed_hod_departments,
+    ensure_hod_access,
+    serialize_task_for_hod,
+    normalize_task_status,
+    coerce_record_date,
+    resolve_branch_code_from_loc,
+    DEPARTMENT_ROLE_MAP,
+    DEPARTMENT_LOG_FIELDS,
+    TASK_MANAGER_ROLES,
+    TASK_ASSIGNABLE_ROLES,
+)
+import datetime
+import csv
+from django.db import HttpResponse
+from master.models import HospitalSettings
+
 # Create your views here.
 
 class TaskListCreateAPIView(generics.ListCreateAPIView):

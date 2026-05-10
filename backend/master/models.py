@@ -1,8 +1,6 @@
 from django.db import models
-from django.db import models
-from django.conf import settings  
 from core.utils import get_default_branch_code, get_branch_settings
-# Create your models here.
+
 
 class ServiceMaster(models.Model):
     CATEGORY_CHOICES = [
@@ -12,21 +10,21 @@ class ServiceMaster(models.Model):
         ('RADIOLOGY', 'Radiology'),
         ('GENERAL SERVICES', 'General Services'),
     ]
-    
     PRICING_CHOICES = [
         ('CASH', 'Cash'),
         ('CASHLESS', 'Cashless'),
     ]
-    
+
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)
-    pricing_type = models.CharField(max_length=10, choices=PRICING_CHOICES, default='CASH') 
+    pricing_type = models.CharField(max_length=10, choices=PRICING_CHOICES, default='CASH')
     description = models.TextField()
     code = models.CharField(max_length=50, blank=True)
     rate = models.DecimalField(max_digits=10, decimal_places=2)
 
     def __str__(self):
         return f"[{self.category}] {self.description} ({self.pricing_type})"
-    
+
+
 class MedicineMaster(models.Model):
     name = models.CharField(max_length=255)
     batch_no = models.CharField(max_length=100, blank=True, null=True)
@@ -37,6 +35,7 @@ class MedicineMaster(models.Model):
     def __str__(self):
         return f"{self.name} - {self.batch_no}"
 
+
 class Doctor(models.Model):
     name = models.CharField(max_length=255)
     qualification = models.CharField(max_length=255, blank=True)
@@ -44,6 +43,7 @@ class Doctor(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.qualification}"
+
 
 class HospitalSettings(models.Model):
     branch = models.CharField(max_length=10, unique=True, default='LNM')
@@ -60,7 +60,13 @@ class HospitalSettings(models.Model):
     def save(self, *args, **kwargs):
         self.branch = str(self.branch or '').upper()
         if not self.slug:
-            self.slug = str(self.branch_name or self.branch or '').strip().lower().replace('&', 'and').replace('/', '-').replace(' ', '-')
+            self.slug = (
+                str(self.branch_name or self.branch or '')
+                .strip().lower()
+                .replace('&', 'and')
+                .replace('/', '-')
+                .replace(' ', '-')
+            )
         self.slug = str(self.slug).strip().lower()
         if not self.uhid_prefix:
             self.uhid_prefix = (self.branch or 'SH')[:3].upper()

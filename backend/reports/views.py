@@ -12,12 +12,15 @@ from django.utils import timezone
 from django.conf import settings
 from xhtml2pdf import pisa
 from patients.models import Patient, Admission, MedicalHistory, Discharge, Billing
-from master.models import HospitalSettings
+from master.models import HospitalSettings, MedicineMaster
 from .models import LabReport, DischargeSummary, PharmacyRecord, ReportMaster
 from .serializers import LabReportSerializer, DischargeSummarySerializer, PharmacyRecordSerializer, ReportMasterSerializer
 from .templates import DISCHARGE_TEMPLATES
 from .report_templates import build_suggested_reports_for_admission
 import qrcode
+import copy
+from django.db import transaction
+from core.utils import (get_or_create_current_billing,)
 
 # Create your views here.
 
@@ -628,3 +631,17 @@ class CanonicalRecordsAPIView(APIView):
             "reports": report_results,
             "medicines": medicine_results,
         }, status=status.HTTP_200_OK)
+
+class PrintAdmissionNoteView(APIView):
+    permission_classes = []
+
+    def get(self, request, uhid, adm_no):
+        admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
+        ctx = _build_patient_header_context(admission, "ADMISSION NOTE")
+        ctx["medical"] = getattr(admission, 'medicalHistory', None)
+        return _render_pdf("pdf/admission_note.html", ctx, "admission_note", uhid)
+
+class ReportMasterViewSet(viewsets.ModelViewSet):
+    queryset = ReportMaster.objects.all().order_by('name')
+    serializer_class = ReportMasterSerializer
+    permission_classes = [IsAuthenticated]

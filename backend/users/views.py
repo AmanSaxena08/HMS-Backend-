@@ -15,7 +15,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from .models import PasswordResetOTP
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.decorators import api_view, permission_classes
-from patients.models import HospitalSettings
+from master.models import HospitalSettings
 
 
 

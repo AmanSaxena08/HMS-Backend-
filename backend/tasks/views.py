@@ -1,6 +1,10 @@
-from django.shortcuts import get_object_or_404
+import datetime
+import csv
+from urllib.parse import quote
 from django.db import transaction
-from django.db.models import Count, Q, Case, When, Value, IntegerField
+from django.db.models import Count, Q, Case, When, Value, IntegerField, models
+from django.shortcuts import get_object_or_404
+from django.http import HttpResponse
 from django.utils import timezone
 from django.conf import settings
 from rest_framework import generics, status
@@ -11,6 +15,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from users import permissions
 from users.models import CustomUser
 from patients.models import Patient, Admission
+from master.models import HospitalSettings
 from .models import Task, HODReview, DepartmentLogEntry
 from .serializers import TaskSerializer, BulkTaskAssignSerializer, HODReviewSerializer, DepartmentLogEntrySerializer
 from core.utils import (
@@ -29,10 +34,6 @@ from core.utils import (
     TASK_MANAGER_ROLES,
     TASK_ASSIGNABLE_ROLES,
 )
-import datetime
-import csv
-from django.db import HttpResponse
-from master.models import HospitalSettings
 
 # Create your views here.
 

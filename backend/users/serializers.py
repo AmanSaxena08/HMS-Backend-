@@ -4,7 +4,7 @@ import re
 from rest_framework import serializers
 from .models import CustomUser
 from django.db import transaction
-from patients.models import HospitalSettings
+from master.models import HospitalSettings
 
 
 GLOBAL_ACCESS_ROLES = {'superadmin', 'office_admin'}

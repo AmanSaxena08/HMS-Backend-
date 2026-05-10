@@ -1,26 +1,25 @@
-from django.shortcuts import render
-import os, base64, io
-from decimal import Decimal
-from rest_framework import generics, viewsets, status
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+import os, base64, io, copy, qrcode
+import datetime
+from decimal import Decimal, InvalidOperation
+from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.conf import settings
+from rest_framework import generics, viewsets, status
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from xhtml2pdf import pisa
 from patients.models import Patient, Admission, MedicalHistory, Discharge, Billing
 from master.models import HospitalSettings, MedicineMaster
+from core.utils import get_or_create_current_billing
 from .models import LabReport, DischargeSummary, PharmacyRecord, ReportMaster
 from .serializers import LabReportSerializer, DischargeSummarySerializer, PharmacyRecordSerializer, ReportMasterSerializer
 from .templates import DISCHARGE_TEMPLATES
 from .report_templates import build_suggested_reports_for_admission
-import qrcode
-import copy
-from django.db import transaction
-from core.utils import (get_or_create_current_billing,)
 
 # Create your views here.
 

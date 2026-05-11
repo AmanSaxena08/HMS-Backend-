@@ -11,7 +11,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sangi_hospital.settings")
 django.setup()
 
 from users.models import CustomUser  # noqa: E402
-from patients.models import HospitalSettings  # noqa: E402
+from master.models import HospitalSettings  # noqa: E402
 
 
 DEFAULTS = {

@@ -65,6 +65,8 @@ DEPARTMENT_LOG_FIELDS = {
 }
 
 class PatientViewSet(viewsets.ModelViewSet):
+    from core.utils import StandardPagination
+    pagination_class = StandardPagination
     queryset = Patient.objects.all().order_by('-created_at')
     serializer_class = PatientSerializer
     lookup_field = 'uhid'
@@ -393,14 +395,14 @@ class PatientViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(pending_patients, many=True)
         return Response(serializer.data)
     
-    @action(detail=False, methods=['get'], url_path='cashless-records')
-    def cashless_records(self, request):
-        # 1. Strict Security Check: Only Office Admins can hit this endpoint
-        if getattr(request.user, 'role', '') != 'office_admin':
-            return Response(
-                {"error": "Unauthorized access. Only Office Admins can view the corporate dashboard."}, 
-                status=status.HTTP_403_FORBIDDEN
-            )
+    # @action(detail=False, methods=['get'], url_path='cashless-records')
+    # def cashless_records(self, request):
+    #     # 1. Strict Security Check: Only Office Admins can hit this endpoint
+    #     if getattr(request.user, 'role', '') != 'office_admin':
+    #         return Response(
+    #             {"error": "Unauthorized access. Only Office Admins can view the corporate dashboard."}, 
+    #             status=status.HTTP_403_FORBIDDEN
+    #         )
         
         # 2. Database Query: Find patients linked to an admission that has a cashless bill
         # The .distinct() ensures we don't get duplicate patients if they have multiple cashless visits

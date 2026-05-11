@@ -5,7 +5,7 @@ import django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sangi_hospital.settings')
 django.setup()
 
-from patients.models import ServiceMaster
+from master.models import ServiceMaster
 
 def run_import(filepath, is_cashless=False):
     try:

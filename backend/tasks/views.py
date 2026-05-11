@@ -2,7 +2,8 @@ import datetime
 import csv
 from urllib.parse import quote
 from django.db import transaction
-from django.db.models import Count, Q, Case, When, Value, IntegerField, models
+from django.db import models
+from django.db.models import Count, Q, Case, When, Value, IntegerField
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from django.utils import timezone
@@ -129,25 +130,41 @@ class TaskEligibleEmployeesAPIView(APIView):
 
     def get(self, request):
         user = request.user
-        department = request.query_params.get('department')
+        department = request.query_params.get('department', '').strip()
 
-        if user.role == 'superadmin':
-            employees = CustomUser.objects.filter(role__in=TASK_ASSIGNABLE_ROLES | {'admin', 'office_admin'})
-        elif user.role == 'office_admin':
-            employees = CustomUser.objects.filter(role__in=TASK_ASSIGNABLE_ROLES)
+        # Get role slug for the requested department (e.g. "Billing" -> "billing")
+        role_slug = get_department_role(department) if department else ''
+
+        if user.role in ('superadmin', 'office_admin'):
+            # Filter by role slug if department specified, else return all assignable staff
+            if role_slug:
+                employees = CustomUser.objects.filter(role=role_slug, is_active=True)
+            else:
+                employees = CustomUser.objects.filter(role__in=TASK_ASSIGNABLE_ROLES, is_active=True)
+
         elif user.role == 'admin':
-            employees = CustomUser.objects.filter(role__in=TASK_ASSIGNABLE_ROLES, branch=user.branch)
+            if role_slug:
+                employees = CustomUser.objects.filter(role=role_slug, branch=user.branch, is_active=True)
+            else:
+                employees = CustomUser.objects.filter(role__in=TASK_ASSIGNABLE_ROLES, branch=user.branch, is_active=True)
+
         elif user.role == 'hod':
-            role_slug = get_department_role(department)
             if not role_slug:
                 return Response({"error": "Invalid department."}, status=status.HTTP_400_BAD_REQUEST)
-            employees = CustomUser.objects.filter(role=role_slug)
-        if getattr(user, 'branch', None) in get_valid_branch_codes():
-                employees = employees.filter(branch=user.branch)
-        else:
-            employees = CustomUser.objects.none()
+            employees = CustomUser.objects.filter(role=role_slug, is_active=True)
 
-        data = [{"id": emp.id, "name": emp.get_full_name().strip() or emp.username, "role": emp.get_role_display()} for emp in employees]
+        else:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        data = [
+            {
+                "id":    emp.id,
+                "name":  emp.get_full_name().strip() or emp.username,
+                "role":  emp.role,
+                "emp_id": emp.emp_id or "",
+            }
+            for emp in employees
+        ]
         return Response(data)
     
 class BulkTaskAssignAPIView(APIView):

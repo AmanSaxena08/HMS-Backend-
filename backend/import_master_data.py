@@ -6,7 +6,8 @@ import math
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sangi_hospital.settings")
 django.setup()
 
-from patients.models import MedicineMaster, ReportMaster
+from master.models import MedicineMaster
+from reports.models import ReportMaster
 
 def import_data():
     # Pointing exactly to your Excel file in the data folder

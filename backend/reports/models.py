@@ -5,7 +5,10 @@ from patients.models import Admission, Patient
 
 class LabReport(models.Model):
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='lab_reports')
-    admission = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name='lab_reports', null=True, blank=True)
+    admission = models.ForeignKey(
+    Admission, on_delete=models.CASCADE,
+    related_name='lab_reports'
+)
 
     report_name = models.CharField(max_length=255)
     report_type = models.CharField(max_length=100, blank=True)

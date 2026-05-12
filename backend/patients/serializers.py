@@ -205,7 +205,11 @@ class AdmissionSerializer(serializers.ModelSerializer):
             local_dt = timezone.localtime(instance.dateTime)
             data['dateTime'] = local_dt.strftime('%Y-%m-%dT%H:%M')
         billing = instance.bills.order_by('-id').first()
-        data['bill_type'] = billing.bill_type if billing else 'CASH'
+        if billing:
+            data['bill_type'] = billing.bill_type
+        else:
+            # Seed from admission's own payMode before billing is created
+            data['bill_type'] = 'CASHLESS' if str(getattr(instance, 'payMode', '') or '').lower() == 'cashless' else 'CASH'
         return data
 
 

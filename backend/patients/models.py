@@ -71,11 +71,19 @@ class Admission(models.Model):
         ('DayCare', 'Day Care'),
     )
 
+    PAY_MODE_CHOICES = (
+        ('cash', 'Cash'),
+        ('cashless', 'Cashless'),
+    )
+
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='admissions')
     ipdNo = models.CharField(max_length=50, unique=True, blank=True)
     admNo = models.PositiveIntegerField()
     admissionType = models.CharField(max_length=20, choices=ADMISSION_TYPE_CHOICES, default='IPD')
-    dateTime = models.DateTimeField(default=timezone.now) 
+    # Per-admission paymode — set by receptionist at registration/re-admission time.
+    # Drives billing bill_type and service pricing. Independent of Patient.payMode.
+    payMode = models.CharField(max_length=20, choices=PAY_MODE_CHOICES, default='cash')
+    dateTime = models.DateTimeField(default=timezone.now)
     
     class Meta:
         unique_together = ('patient', 'admNo') 

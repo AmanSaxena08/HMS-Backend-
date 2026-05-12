@@ -21,16 +21,27 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # This loads the variables from your .env file
 load_dotenv()
 
+
+def env_bool(name, default=False):
+    return str(os.getenv(name, str(default))).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def env_list(name, default=None):
+    raw = os.getenv(name)
+    if not raw:
+        return list(default or [])
+    return [value.strip() for value in raw.split(',') if value.strip()]
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-)d9^_z4i@p2p2x4h+xs*d4ys-#^i&9bc%njrw8gb(kb1tm-2z&'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-local-development-only')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool('DEBUG', False)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = env_list('ALLOWED_HOSTS', ['localhost', '127.0.0.1'])
 
 
 # Application definition
@@ -154,13 +165,27 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:3001",
-    "http://localhost:3002",
-    "http://127.0.0.1:3002",
-]
+CORS_ALLOWED_ORIGINS = env_list(
+    'CORS_ALLOWED_ORIGINS',
+    [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:3001',
+        'http://127.0.0.1:3001',
+        'http://localhost:3002',
+        'http://127.0.0.1:3002',
+        'http://localhost:3003',
+        'http://127.0.0.1:3003',
+        'http://localhost:3004',
+        'http://127.0.0.1:3004',
+        'http://localhost:3010',
+        'http://127.0.0.1:3010',
+        'http://localhost:5175',
+        'http://127.0.0.1:5175',
+    ],
+)
+
+CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS', CORS_ALLOWED_ORIGINS)
 
 # This is the magic key that allows React's "credentials: include" to work!
 CORS_ALLOW_CREDENTIALS = True

@@ -91,17 +91,26 @@ def resolve_branch_code_from_loc(loc_id=None, explicit_branch=None):
 # ── Billing helper ─────────────────────────────────────────────────────────────
 
 def get_or_create_current_billing(admission):
+    """
+    Gets or creates the Billing row for an admission.
+    bill_type is seeded from Admission.payMode — the per-admission value
+    set by the receptionist — NOT from the patient-level payMode.
+    """
     from patients.models import Billing
     billing = admission.bills.order_by('-id').first()
     if billing:
         return billing, False
-    pay_mode = str(getattr(admission.patient, 'payMode', '') or '').lower()
-    initial_bill_type = 'CASHLESS' if 'cashless' in pay_mode else 'CASH'
+    adm_pay_mode = str(getattr(admission, 'payMode', '') or '').lower()
+    initial_bill_type = 'CASHLESS' if 'cashless' in adm_pay_mode else 'CASH'
     return Billing.objects.create(admission=admission, bill_type=initial_bill_type), True
 
 # ── Service pricing helpers ────────────────────────────────────────────────────
 
-def normalize_service_pricing(service_data, patient=None):
+def normalize_service_pricing(service_data, patient=None, admission=None):
+    """
+    Resolves CASH or CASHLESS for a service.
+    Priority: explicit field in payload → admission.payMode → patient.payMode (last resort).
+    """
     raw_pricing = str(
         service_data.get('pricing_type')
         or service_data.get('pricingApplied')
@@ -110,11 +119,17 @@ def normalize_service_pricing(service_data, patient=None):
     ).strip().upper()
     if raw_pricing in {'CASH', 'CASHLESS'}:
         return raw_pricing
+    # Use per-admission payMode first — this is the source of truth
+    if admission is not None:
+        adm_pay_mode = str(getattr(admission, 'payMode', '') or '').lower()
+        return 'CASHLESS' if 'cashless' in adm_pay_mode else 'CASH'
+    # Absolute last resort fallback (e.g. called without admission context)
     pay_mode = str(getattr(patient, 'payMode', '') or '').lower()
     return 'CASHLESS' if 'cashless' in pay_mode else 'CASH'
 
 
-def resolve_service_defaults(service_data, patient=None):
+def resolve_service_defaults(service_data, patient=None, admission=None):
+    
     from master.models import ServiceMaster
     svc_name = (
         service_data.get('svcName') or
@@ -124,7 +139,7 @@ def resolve_service_defaults(service_data, patient=None):
     if not svc_name:
         raise ValueError('Service name (svcName) is required.')
 
-    pricing_applied = normalize_service_pricing(service_data, patient)
+    pricing_applied = normalize_service_pricing(service_data, patient, admission)
     svc_date = service_data.get('svcDate') or service_data.get('date') or None
 
     try:

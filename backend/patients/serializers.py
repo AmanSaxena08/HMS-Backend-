@@ -159,6 +159,7 @@ class BillingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Billing
         fields = '__all__'
+        read_only_fields = ['admission', 'created_at', 'updated_at']
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -186,10 +187,16 @@ class AdmissionSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def get_billing(self, obj):
-        billing = obj.bills.order_by('-id').first()
-        if not billing:
-            return None
-        return BillingSerializer(billing, context=self.context).data
+        """
+        PHASE 6 CHANGE: Changed from obj.bills.order_by('-id').first() to obj.billing
+        because Billing is now OneToOneField, not ForeignKey.
+        This means there's exactly one billing per admission, accessed directly.
+        """
+        try:
+            billing = obj.billing  # Direct access (OneToOneField)
+            return BillingSerializer(billing, context=self.context).data if billing else {}
+        except Billing.DoesNotExist:
+            return {}
 
     def get_labReports(self, obj):
         reports = obj.lab_reports.order_by('report_date', 'id')
@@ -204,12 +211,15 @@ class AdmissionSerializer(serializers.ModelSerializer):
         if instance.dateTime:
             local_dt = timezone.localtime(instance.dateTime)
             data['dateTime'] = local_dt.strftime('%Y-%m-%dT%H:%M')
-        billing = instance.bills.order_by('-id').first()
-        if billing:
+        
+        # PHASE 6 CHANGE: Changed from obj.bills.order_by('-id').first() to obj.billing
+        try:
+            billing = instance.billing
             data['bill_type'] = billing.bill_type
-        else:
+        except Billing.DoesNotExist:
             # Seed from admission's own payMode before billing is created
             data['bill_type'] = 'CASHLESS' if str(getattr(instance, 'payMode', '') or '').lower() == 'cashless' else 'CASH'
+        
         return data
 
 

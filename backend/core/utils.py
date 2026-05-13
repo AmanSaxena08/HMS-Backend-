@@ -93,16 +93,17 @@ def resolve_branch_code_from_loc(loc_id=None, explicit_branch=None):
 def get_or_create_current_billing(admission):
     """
     Gets or creates the Billing row for an admission.
-    bill_type is seeded from Admission.payMode — the per-admission value
-    set by the receptionist — NOT from the patient-level payMode.
+    Now using OneToOneField, so there's exactly one billing per admission.
     """
     from patients.models import Billing
-    billing = admission.bills.order_by('-id').first()
-    if billing:
+    try:
+        billing = admission.billing
         return billing, False
-    adm_pay_mode = str(getattr(admission, 'payMode', '') or '').lower()
-    initial_bill_type = 'CASHLESS' if 'cashless' in adm_pay_mode else 'CASH'
-    return Billing.objects.create(admission=admission, bill_type=initial_bill_type), True
+    except Billing.DoesNotExist:
+        adm_pay_mode = str(getattr(admission, 'payMode', '') or '').lower()
+        initial_bill_type = 'CASHLESS' if 'cashless' in adm_pay_mode else 'CASH'
+        billing = Billing.objects.create(admission=admission, bill_type=initial_bill_type)
+        return billing, True
 
 # ── Service pricing helpers ────────────────────────────────────────────────────
 
@@ -195,46 +196,32 @@ def normalize_task_status(raw_status, due_date=None):
 
 
 def serialize_task_for_hod(task):
-    patient = task.patient
-    status_value = task.status
-    if status_value != 'Completed' and task.due_date and task.due_date < timezone.now():
-        status_value = 'Overdue'
-
-    status_map = {
-        'Pending': 'pending',
-        'In Progress': 'in-progress',
-        'Completed': 'completed',
-        'On Hold': 'pending',
-        'Overdue': 'overdue',
-    }
-    priority_map = {
-        'Low': 'low',
-        'Medium': 'medium',
-        'High': 'high',
-        'Urgent': 'high',
-    }
-
-    employee_name = task.assigned_to.get_full_name().strip() or task.assigned_to.username
-
-    patient_type = 'TPA'
-    if patient:
-        if (patient.cashlessType or '').lower().find('card') >= 0:
+    """
+    Serializes a task for HOD view with admission context.
+    """
+    # Use task.admission if set, otherwise get preferred admission
+    admission = task.admission or task.patient.admissions.order_by('-admNo').first()
+    adm_no = admission.admNo if admission else None
+    
+    patient_type = 'Cash'
+    if task.patient:
+        if (task.patient.cashlessType or '').lower().find('card') >= 0:
             patient_type = 'Card'
-        elif (patient.payMode or '').lower().find('cash') >= 0:
-            patient_type = 'Cash'
-
+        elif task.patient.admissions.filter(payMode='cashless').exists():
+            patient_type = 'TPA'
+    
     return {
         'id': task.id,
-        'employeeId': task.assigned_to_id,
-        'employeeName': employee_name,
-        'taskType': task.title,
-        'patientId': patient.uhid if patient else '',
-        'patientType': patient_type,
-        'priority': priority_map.get(task.priority, 'medium'),
-        'dueDate': task.due_date.date().isoformat() if task.due_date else '',
-        'status': status_map.get(status_value, 'pending'),
-        'notes': task.description or '',
-        'department': task.department,
+        'patient_uhid': task.patient.uhid if task.patient else '',
+        'patient_name': task.patient.patientName if task.patient else '',
+        'patient_type': patient_type,
+        'admission_no': adm_no,
+        'department': task.department or '',
+        'assigned_to': task.assigned_to.get_full_name().strip() or task.assigned_to.username if task.assigned_to else '',
+        'status': task.status or 'Pending',
+        'priority': task.priority or 'Medium',
+        'created_at': task.created_at.isoformat() if task.created_at else '',
+        'updated_at': task.updated_at.isoformat() if task.updated_at else '',
     }
 
 
@@ -300,14 +287,6 @@ def validate_generic_task_assignment(actor, assigned_to, patient=None, departmen
 
     if actor.role == 'admin' and assigned_to.branch != actor.branch:
         raise PermissionDenied("Branch Admin can assign tasks only inside their own branch.")
-
-    if (
-        patient and
-        actor.role not in {'office_admin', 'superadmin'} and
-        assigned_to.branch in valid_branch_codes and
-        patient.branch_location != assigned_to.branch
-    ):
-        raise ValidationError({'patient': 'Selected patient must belong to the same branch as the assigned employee.'})
 
 
 def get_department_role(department):

@@ -1,5 +1,6 @@
 import os, base64, io, openpyxl
 import datetime
+import logging
 from decimal import Decimal
 from rest_framework import viewsets, status
 from rest_framework.views import APIView
@@ -17,8 +18,9 @@ from tasks.models import Task
 from core.utils import get_branch_settings_queryset
 from .models import ServiceMaster, MedicineMaster, Doctor, HospitalSettings
 from .serializers import ServiceMasterSerializer, MedicineMasterSerializer, DoctorSerializer, HospitalSettingsSerializer
-                                    
-# Create your views here.
+
+logger = logging.getLogger(__name__)
+
 
 class ServiceMasterViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ServiceMasterSerializer
@@ -61,7 +63,8 @@ class HospitalSettingsViewSet(viewsets.ModelViewSet):
         if CustomUser.objects.filter(branch=instance.branch).exists():
             raise ValidationError({'branch': 'This branch already has user accounts and cannot be deleted.'})
         return super().destroy(request, *args, **kwargs)
-    
+
+
 class MedicineMasterViewSet(viewsets.ModelViewSet):
     queryset = MedicineMaster.objects.all().order_by('name')
     serializer_class = MedicineMasterSerializer
@@ -151,7 +154,72 @@ def parse_medicine_master_workbook(uploaded_file):
     return parsed_rows
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# PHASE 6 IMPROVEMENT — MedicineMaster Preview Endpoint
+# ════════════════════════════════════════════════════════════════════════════════
+
+class MedicineMasterPreviewAPIView(APIView):
+    """
+    Preview endpoint for medicine master import.
+    Validates the file and returns a sample WITHOUT committing to DB.
+    
+    Usage:
+        POST /api/master/medicines/preview/
+        Body: FormData with 'file' field
+        
+    Returns:
+        {
+            "total_rows": 150,
+            "preview_rows": [...first 10 medicines...],
+            "message": "Preview: 150 medicines will be imported. Click 'Confirm Import' to finalize."
+        }
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        if getattr(request.user, 'role', '') not in {'superadmin', 'office_admin'}:
+            raise PermissionDenied("Only Super Admin and Office Admin can preview medicine imports.")
+
+        uploaded_file = request.FILES.get('file')
+        if not uploaded_file:
+            raise ValidationError({'file': 'Please upload an Excel file.'})
+
+        try:
+            rows = parse_medicine_master_workbook(uploaded_file)
+            
+            return Response(
+                {
+                    'total_rows': len(rows),
+                    'preview_rows': MedicineMasterSerializer(rows[:10], many=True).data,
+                    'message': f'Preview: {len(rows)} medicines will be imported. Click "Confirm Import" to finalize.',
+                },
+                status=status.HTTP_200_OK,
+            )
+        except ValidationError as e:
+            raise e
+        except Exception as e:
+            logger.exception('Medicine import preview failed')
+            raise ValidationError({'file': f'Failed to parse file: {str(e)}'})
+
+
 class MedicineMasterImportAPIView(APIView):
+    """
+    Import endpoint for medicine master.
+    Requires 'confirmed=true' from frontend after preview is reviewed.
+    
+    Usage:
+        POST /api/master/medicines/import/
+        Body: FormData with 'file' field and 'confirmed' parameter
+        
+    Returns:
+        {
+            "imported": 150,
+            "replaced": 120,
+            "message": "Medicine master updated successfully.",
+            "sample": [...first 10 medicines...]
+        }
+    """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -163,33 +231,52 @@ class MedicineMasterImportAPIView(APIView):
         if not uploaded_file:
             raise ValidationError({'file': 'Please upload an Excel file.'})
 
-        rows = parse_medicine_master_workbook(uploaded_file)
+        # Check for confirmation from frontend
+        is_confirmed = str(request.data.get('confirmed', 'false')).lower() == 'true'
+        
+        if not is_confirmed:
+            return Response(
+                {
+                    'warning': 'Please preview the file first before importing.',
+                    'message': 'Use the preview endpoint to validate your file.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        with transaction.atomic():
-            MedicineMaster.objects.all().delete()
-            MedicineMaster.objects.bulk_create(rows)
+        try:
+            rows = parse_medicine_master_workbook(uploaded_file)
 
-        return Response(
-            {
-                'imported': len(rows),
-                'message': 'Medicine master updated successfully.',
-                'sample': MedicineMasterSerializer(MedicineMaster.objects.all().order_by('name')[:10], many=True).data,
-            },
-            status=status.HTTP_200_OK,
-        )
+            with transaction.atomic():
+                deleted_count = MedicineMaster.objects.count()
+                MedicineMaster.objects.all().delete()
+                MedicineMaster.objects.bulk_create(rows)
+
+            return Response(
+                {
+                    'imported': len(rows),
+                    'replaced': deleted_count,
+                    'message': 'Medicine master updated successfully.',
+                    'sample': MedicineMasterSerializer(MedicineMaster.objects.all().order_by('name')[:10], many=True).data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception('Medicine master import failed')
+            raise ValidationError({'file': f'Import failed: {str(e)}'})
+
 
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.all().order_by('name')
     serializer_class = DoctorSerializer
     permission_classes = [IsAuthenticated]
-    pagination_class = None # Return all doctors at once for the dropdown
+    pagination_class = None
 
-    # Restrict POST/PUT/DELETE to Admins only
     def check_permissions(self, request):
         super().check_permissions(request)
         if request.method not in ['GET', 'HEAD', 'OPTIONS']:
             if getattr(request.user, 'role', '') not in ['superadmin', 'admin', 'office_admin']:
                 self.permission_denied(request, message="Only Admins can manage the doctors list.")
+
 
 class AdminDashboardStatsAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -197,23 +284,16 @@ class AdminDashboardStatsAPIView(APIView):
     def get(self, request):
         user = request.user
         
-        # 1. Security: Only Admins can see this dashboard data
         if user.role not in ['superadmin', 'office_admin', 'admin']:
             return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
 
         today = timezone.now().date()
         
-        # 2. Get all discharges where the Date of Discharge (dod) is today
         todays_discharges = Discharge.objects.filter(dod__date=today)
 
-        # 3. If it's a Branch Admin, strictly filter to ONLY show their branch!
         if user.role == 'admin':
             todays_discharges = todays_discharges.filter(admission__patient__branch_location=user.branch)
 
-        # 4. Return the exact count to the frontend
         return Response({
             "todaysDischargeCount": todays_discharges.count(),
-            # 💡 Pro-tip: You can easily add more stats here later! 
-            # Example: "totalPatients": Patient.objects.filter(branch_location=user.branch).count()
         }, status=status.HTTP_200_OK)
-    

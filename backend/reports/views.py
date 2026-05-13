@@ -212,7 +212,7 @@ class PrintDischargeSummaryView(APIView):
             "bill_date": discharge.dod.strftime("%d-%m-%Y %H:%M HRS") if (discharge and discharge.dod) else "--",
             "age_sex": f"{age} / {patient.gender.upper()}", "card_no": patient.tpaCard if patient.tpaCard else "--",
             "room": f"{discharge.roomNo} / {discharge.wardName.upper()}" if discharge and discharge.roomNo else "-- / --",
-            "panel": patient.tpa.upper() if patient.tpa else patient.payMode.upper(),
+            "panel": patient.tpa.upper() if patient.tpa else (admission.payMode.upper() if admission.payMode else 'CASH'),
             "contact_no": patient.phone, "status_on_discharge": discharge.dischargeStatus.upper() if discharge and discharge.dischargeStatus else "--",
         }
 
@@ -238,8 +238,8 @@ def _build_patient_header_context(admission, summary_label):
         calc_age = (timezone.now().date() - patient.dob).days // 365
         age = f"{calc_age} YRS"
 
-    pay_mode_raw = (patient.payMode or "").strip().lower()
-    is_cashless = pay_mode_raw != "cash"
+    adm_pay_mode = str(getattr(admission, 'payMode', '') or '').lower()
+    is_cashless = adm_pay_mode == 'cashless'
 
     return {
         "s": {"summary_type": summary_label},
@@ -355,7 +355,7 @@ class PrintBillView(APIView):
             "consultant": discharge.doctorName.upper() if discharge and discharge.doctorName else "--",
             "room_ward": room_ward,
             "claim_id": patient.tpaPanelCardNo or "--",
-            "panel": patient.tpa.upper() if patient.tpa else patient.payMode.upper(),
+            "panel": patient.tpa.upper() if patient.tpa else (admission.payMode.upper() if admission.payMode else 'CASH'),
             "doa": timezone.localtime(admission.dateTime).strftime("%d/%m/%Y, %I:%M %p") if admission.dateTime else "--",
             "contact_no": patient.phone or "--",
             "dod": timezone.localtime(discharge.dod).strftime("%d/%m/%Y, %I:%M %p") if discharge and discharge.dod else "--",

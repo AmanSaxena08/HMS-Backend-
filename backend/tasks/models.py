@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import ForeignKey, CASCADE, SET_NULL
 from django.conf import settings
 from patients.models import Patient, Admission  
 from users.models import CustomUser
@@ -32,8 +33,26 @@ class Task(models.Model):
     # Which department does this task belong to?
     department = models.CharField(max_length=100) 
     
-    # 🌟 SINGLE PATIENT TRACKING: 1 Task = 1 Patient
+    # SINGLE PATIENT TRACKING: 1 Task = 1 Patient
     patient = models.ForeignKey('patients.Patient', on_delete=models.CASCADE, related_name='assigned_tasks', null=True, blank=True)
+    
+    # ════════════════════════════════════════════════════════════════════════════════
+    # PHASE 6 IMPROVEMENT — Per-Admission Task Assignment
+    # ════════════════════════════════════════════════════════════════════════════════
+    # Specific admission this task is for. If null, defaults to latest active admission.
+    # This prevents confusion when a patient has multiple admissions (re-visits).
+    #
+    # Example:
+    #   Task 1: Patient X, Admission 1 → Staff works on admission 1
+    #   Task 2: Patient X, Admission 2 → Staff works on admission 2 (not confused with admission 1)
+    admission = models.ForeignKey(
+        Admission, 
+        on_delete=models.CASCADE, 
+        related_name='tasks',
+        null=True, 
+        blank=True,
+        help_text="Specific admission this task is for. If null, defaults to latest active admission."
+    )
     
     priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='Medium')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pending')
@@ -42,8 +61,27 @@ class Task(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['patient', 'assigned_to']),
+            models.Index(fields=['admission', 'status']),
+            models.Index(fields=['assigned_to', 'status']),
+            models.Index(fields=['created_at']),
+        ]
+
     def __str__(self):
         return f"{self.title} - {self.assigned_to.username}"
+    
+    def get_active_admission(self):
+        """
+        Returns the admission for this task.
+        If admission is explicitly set, use it. Otherwise, use latest admission.
+        """
+        if self.admission:
+            return self.admission
+        return self.patient.admissions.order_by('-admNo').first() if self.patient else None
+
     
 class HODReview(models.Model):
     PERIOD_CHOICES = (

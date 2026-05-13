@@ -83,6 +83,13 @@ class Admission(models.Model):
     # Per-admission paymode — set by receptionist at registration/re-admission time.
     # Drives billing bill_type and service pricing. Independent of Patient.payMode.
     payMode = models.CharField(max_length=20, choices=PAY_MODE_CHOICES, default='cash')
+    class Meta:
+        ordering = ['-admNo']
+        unique_together = ('patient', 'admNo')  # Ensure no duplicate admNo for same patient
+        indexes = [
+            models.Index(fields=['patient', 'admNo']),
+            models.Index(fields=['payMode']),
+        ]
     dateTime = models.DateTimeField(default=timezone.now)
     
     class Meta:
@@ -176,9 +183,18 @@ class Service(models.Model):
     svcQty = models.PositiveIntegerField(default=1)
     svcRate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     svcTot = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    class Meta:
+        ordering = ['svcDate', 'id']
+        indexes = [
+            models.Index(fields=['admission', 'svcDate']),
+            models.Index(fields=['pricing_applied']),
+        ]
 
 class Billing(models.Model):
-    admission = models.ForeignKey('Admission', related_name='bills', on_delete=models.CASCADE)
+    admission = models.OneToOneField(
+        Admission, on_delete=models.CASCADE,
+        related_name='billing'  # Changed from 'bills' to 'billing' (one-to-one is singular)
+    )
     
     BILL_TYPE_CHOICES = [
         ('CASH', 'Cash'),

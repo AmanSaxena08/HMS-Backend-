@@ -19,9 +19,120 @@ from core.utils import get_or_create_current_billing
 from .models import LabReport, DischargeSummary, PharmacyRecord, ReportMaster
 from .serializers import LabReportSerializer, DischargeSummarySerializer, PharmacyRecordSerializer, ReportMasterSerializer
 from .templates import DISCHARGE_TEMPLATES
-from .report_templates import build_suggested_reports_for_admission
+from .report_templates import build_suggested_reports_for_admission, build_report_from_template, get_template_by_label
 
 # Create your views here.
+
+def _prefill_sections_from_db(sections, admission):
+    """
+    Walk through all sections of a discharge summary template and fill in
+    values from the already-saved MedicalHistory and Discharge models.
+ 
+    This is called both when serving a fresh template (GET, no saved summary)
+    AND when printing without a saved summary, so the PDF always has real data.
+ 
+    Only fills a section if it currently has an empty or default value —
+    never overwrites something the user explicitly typed and saved.
+    """
+    med = getattr(admission, 'medicalHistory', None)
+    discharge = getattr(admission, 'discharge', None)
+ 
+    # Map each section key → where the real data lives in the DB
+    # Left side = section key in DISCHARGE_TEMPLATES
+    # Right side = lambda(med, discharge) → the value to use
+    DB_FIELD_MAP = {
+        # Filled by receptionist at admission time (MedicalHistory model)
+        'final_diagnosis': lambda m, d: (
+            getattr(m, 'provisionalDiagnosis', '') or
+            getattr(d, 'diagnosis', '') or ''
+        ),
+        'chief_complaints': lambda m, d: (
+            getattr(m, 'chiefComplaints', '') or
+            getattr(m, 'presentComplaints', '') or ''
+        ),
+        'k_c_o': lambda m, d: getattr(m, 'previousDiagnosis', '') or '',
+        'operations_procedures': lambda m, d: getattr(m, 'treatmentAdvised', '') or '',
+        'treatment_advised': lambda m, d: getattr(m, 'treatmentAdvised', '') or '',
+        'investigations': lambda m, d: getattr(m, 'investigations', '') or '',
+        'course_in_hospital': lambda m, d: getattr(m, 'notes', '') or '',
+ 
+        # Filled by receptionist at discharge time (Discharge model)
+        'condition_at_discharge': lambda m, d: (
+            d.dischargeStatus.upper() if d and d.dischargeStatus else ''
+        ),
+ 
+        # Vitals grid — map all vitals from MedicalHistory into the dict
+        'clinical_examination': lambda m, d: {
+            'bp':     getattr(m, 'bp', '')    or '',
+            'pulse':  getattr(m, 'pulse', '') or getattr(m, 'pr', '') or '',
+            'spo2':   getattr(m, 'spo2', '')  or '',
+            'temp':   getattr(m, 'temp', '')  or '',
+            'chest':  getattr(m, 'chest', '') or '',
+            'cvs':    getattr(m, 'cvs', '')   or '',
+            'cns':    getattr(m, 'cns', '')   or '',
+            'abd':    getattr(m, 'pa', '')    or '',  # P/A maps to abd
+            'pallor': '',
+            'icterus': '',
+        } if m else None,
+    }
+ 
+    for section in sections:
+        key = section.get('key')
+        if key not in DB_FIELD_MAP:
+            continue
+ 
+        getter = DB_FIELD_MAP[key]
+        db_value = getter(med, discharge)
+ 
+        if not db_value:
+            # Nothing in DB for this field, leave the template default alone
+            continue
+ 
+        current_value = section.get('value', '')
+ 
+        if section.get('type') == 'vitals_grid':
+            # For vitals: merge DB values into the existing dict
+            # Don't overwrite if user already put something there
+            if isinstance(current_value, dict):
+                merged = {}
+                for vkey, vval in current_value.items():
+                    # Use DB value only if the current slot is empty
+                    merged[vkey] = vval if vval else db_value.get(vkey, '')
+                section['value'] = merged
+            else:
+                section['value'] = db_value
+ 
+        elif isinstance(current_value, str):
+            # For text/textarea: only fill if current value is empty
+            # or is one of the generic template placeholders
+            GENERIC_PREFIXES = (
+                'Patient came/presented in hospital with complaints of -',
+                'All investigation is enclosed.',
+                'Fair & Stable.',
+                'R/W after 5 days',
+                'None',
+                'LAMA.',
+                'REFER.',
+                'DOPR.',
+                'DEATH.',
+            )
+            is_generic = not current_value.strip() or any(
+                current_value.strip().startswith(p) for p in GENERIC_PREFIXES
+            )
+            if is_generic:
+                section['value'] = db_value
+ 
+    return sections
+ 
+ 
+def _clean_discharge_status(raw_status):
+    s = str(raw_status).upper()
+    if 'LAMA' in s:  return 'LAMA'
+    if 'DOPR' in s:  return 'DOPR'
+    if 'REFER' in s: return 'REFER'
+    if 'DEATH' in s: return 'DEATH'
+    return 'NORMAL'
+
 
 class LabReportListCreateView(generics.ListCreateAPIView):
     serializer_class = LabReportSerializer
@@ -88,150 +199,290 @@ class LabReportBulkSaveAPIView(APIView):
 
 class LabReportTemplateSuggestionsAPIView(APIView):
     permission_classes = [IsAuthenticated]
-
+ 
     def get(self, request, uhid, adm_no):
-        patient = get_object_or_404(Patient, uhid=uhid)
+        patient   = get_object_or_404(Patient, uhid=uhid)
         admission = get_object_or_404(Admission, patient=patient, admNo=adm_no)
-
-        suggested_reports = build_suggested_reports_for_admission(patient, admission)
+ 
+        medical_history = getattr(admission, 'medicalHistory', None)
+        ordered_by      = getattr(medical_history, 'treatingDoctor', '') if medical_history else ''
+ 
+        results = []
+ 
+        # ── Step 1: Already-saved lab reports for this admission ──────────────
+        # These come first — receptionist already added these for this patient.
+        # Build them from the saved LabReport rows (real data, already filled).
+        saved_report_names = set()
+        for lab in admission.lab_reports.all().order_by('id'):
+            saved_report_names.add(lab.report_name.strip().casefold())
+            # Try to merge with a rich template for consistent structure
+            template = get_template_by_label(lab.report_name)
+            if template:
+                report = build_report_from_template(
+                    template, patient=patient, admission=admission, ordered_by=ordered_by
+                )
+                # Overlay the actual saved values on top of the template structure
+                report['id']          = lab.id
+                report['amount']      = lab.amount or 0
+                report['remarks']     = lab.remarks or ''
+                report['findings']    = lab.findings or ''
+                report['impression']  = lab.impression or ''
+                report['is_saved']    = True
+                report['is_recommended'] = True
+            else:
+                # No hardcoded template — use the raw saved data
+                report = {
+                    'id':             lab.id,
+                    'reportName':     lab.report_name,
+                    'reportType':     lab.report_type or 'Custom',
+                    'reportCategory': lab.report_category or 'CUSTOM',
+                    'billCategory':   lab.bill_category or 'PATHOLOGY',
+                    'date':           lab.report_date.isoformat() if lab.report_date else timezone.localdate().isoformat(),
+                    'orderedBy':      lab.ordered_by or ordered_by or '',
+                    'amount':         lab.amount or 0,
+                    'remarks':        lab.remarks or '',
+                    'findings':       lab.findings or '',
+                    'impression':     lab.impression or '',
+                    'tests':          lab.tests or [],
+                    'patientUhid':    patient.uhid,
+                    'patientName':    patient.patientName,
+                    'admNo':          admission.admNo,
+                    'is_saved':       True,
+                    'is_recommended': True,
+                }
+            results.append(report)
+ 
+        # ── Step 2: ReportMaster formats not yet saved for this admission ─────
+        # Show the admin-configured report formats (your 3) as empty templates
+        # so billing/office can fill them in. Skip any already saved above.
+        for master_report in ReportMaster.objects.all().order_by('name'):
+            name_key = master_report.name.strip().casefold()
+            if name_key in saved_report_names:
+                # Already in the list from Step 1 — don't duplicate
+                continue
+ 
+            template = get_template_by_label(master_report.name)
+            if template:
+                report = build_report_from_template(
+                    template, patient=patient, admission=admission, ordered_by=ordered_by
+                )
+            else:
+                report = {
+                    'id':             f'master-{master_report.id}',
+                    'reportName':     master_report.name,
+                    'reportType':     'Custom',
+                    'reportCategory': 'CUSTOM',
+                    'billCategory':   'PATHOLOGY',
+                    'date':           timezone.localdate().isoformat(),
+                    'orderedBy':      ordered_by or '',
+                    'amount':         0,
+                    'remarks':        '',
+                    'findings':       '',
+                    'impression':     '',
+                    'tests':          [],
+                    'patientUhid':    patient.uhid,
+                    'patientName':    patient.patientName,
+                    'admNo':          admission.admNo,
+                }
+            report['is_saved']       = False
+            report['is_recommended'] = False
+            results.append(report)
+ 
         return Response(
             {
-                'patient': patient.uhid,
-                'admNo': admission.admNo,
-                'suggested_reports': suggested_reports,
+                'patient':           patient.uhid,
+                'admNo':             admission.admNo,
+                'suggested_reports': results,
             },
             status=status.HTTP_200_OK,
         )
+ 
+ 
     
 class DynamicDischargeSummaryView(APIView):
-    def _clean_status(self, raw_status):
-        status_str = str(raw_status).upper()
-        if "LAMA" in status_str: return "LAMA"
-        if "DOPR" in status_str: return "DOPR"
-        if "REFER" in status_str: return "REFER"
-        if "DEATH" in status_str: return "DEATH"
-        return "NORMAL"
-
+ 
     def get(self, request, uhid, adm_no):
-        raw_type = request.query_params.get('type', 'NORMAL')
-        summary_type = self._clean_status(raw_type)
+        """
+        Load discharge summary for editing in the frontend form.
+        - If a saved summary exists → return it as-is (user's work is preserved).
+        - If no saved summary → return the template pre-filled with ALL data
+          already in the DB (vitals, complaints, diagnosis, etc.) so the
+          billing/office employee doesn't have to re-type what the receptionist
+          already entered.
+        """
         admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
-
         existing_summary = DischargeSummary.objects.filter(admission=admission).first()
+ 
         if existing_summary:
+            # User has already worked on this summary — return exactly as saved
             return Response({
-                "is_existing": True,
-                "summary_type": existing_summary.summary_type,
-                "content": existing_summary.content
+                'is_existing': True,
+                'summary_type': existing_summary.summary_type,
+                'content': existing_summary.content,
             }, status=status.HTTP_200_OK)
-
-        template = copy.deepcopy(DISCHARGE_TEMPLATES.get(summary_type, DISCHARGE_TEMPLATES["NORMAL"]))
-
-        # 🌟 UPDATED PRE-FILL: Iterate through the List to find keys
-        try:
-            med_hist = getattr(admission, 'medicalHistory', None)
-            if med_hist:
-                for section in template["sections"]:
-                    if section["key"] == "k_c_o" and med_hist.previousDiagnosis:
-                        section["value"] = med_hist.previousDiagnosis
-        except Exception:
-            pass
-
-        return Response({"is_existing": False, "summary_type": summary_type, "content": template}, status=status.HTTP_200_OK)
-
+ 
+        # No saved summary yet — build fresh template and pre-fill from DB
+        discharge = getattr(admission, 'discharge', None)
+        raw_type = request.query_params.get('type', 'NORMAL')
+        # Auto-detect summary type from discharge status if not explicitly passed
+        if discharge and discharge.dischargeStatus:
+            summary_type = _clean_discharge_status(discharge.dischargeStatus)
+        else:
+            summary_type = _clean_discharge_status(raw_type)
+ 
+        template = copy.deepcopy(
+            DISCHARGE_TEMPLATES.get(summary_type, DISCHARGE_TEMPLATES['NORMAL'])
+        )
+ 
+        # Pre-fill ALL sections from MedicalHistory + Discharge
+        template['sections'] = _prefill_sections_from_db(template['sections'], admission)
+ 
+        return Response({
+            'is_existing': False,
+            'summary_type': summary_type,
+            'content': template,
+        }, status=status.HTTP_200_OK)
+ 
     def post(self, request, uhid, adm_no):
+        """Save the discharge summary (create or update)."""
         admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
         raw_type = request.data.get('summary_type', 'NORMAL')
-        summary_type = self._clean_status(raw_type)
+        summary_type = _clean_discharge_status(raw_type)
         content = request.data.get('content', {})
-
+ 
         summary, created = DischargeSummary.objects.update_or_create(
             admission=admission,
-            defaults={'summary_type': summary_type, 'content': content, 'created_by': request.user if request.user.is_authenticated else None}
+            defaults={
+                'summary_type': summary_type,
+                'content': content,
+                'created_by': request.user if request.user.is_authenticated else None,
+            }
         )
-        return Response({"message": "Discharge Summary saved successfully!", "data": DischargeSummarySerializer(summary).data}, status=status.HTTP_200_OK)
-
+        return Response({
+            'message': 'Discharge Summary saved successfully!',
+            'data': DischargeSummarySerializer(summary).data,
+        }, status=status.HTTP_200_OK)
+ 
+ 
 class PrintDischargeSummaryView(APIView):
+ 
     def get(self, request, uhid, adm_no):
+        """
+        Generate discharge summary PDF.
+        - Uses saved DischargeSummary.content if it exists.
+        - If no saved summary, builds from template and pre-fills from DB —
+          so the print always has real patient data even if nobody explicitly
+          saved the summary form.
+        """
+        import io
+        from django.template.loader import render_to_string
+        from django.http import HttpResponse
+        from xhtml2pdf import pisa
+ 
         admission = get_object_or_404(Admission, patient__uhid=uhid, admNo=adm_no)
         summary = DischargeSummary.objects.filter(admission=admission).first()
-        if not summary:
+ 
+        if summary:
+            sections = summary.content.get('sections', [])
+            summary_type = summary.summary_type
+        else:
+            # No saved summary — build and pre-fill from DB so PDF has real data
             discharge = getattr(admission, 'discharge', None)
             raw_status = getattr(discharge, 'dischargeStatus', 'NORMAL')
-            status_str = str(raw_status).upper()
-            if "LAMA" in status_str:
-                fallback_type = "LAMA"
-            elif "DOPR" in status_str:
-                fallback_type = "DOPR"
-            elif "REFER" in status_str:
-                fallback_type = "REFER"
-            elif "DEATH" in status_str:
-                fallback_type = "DEATH"
-            else:
-                fallback_type = "NORMAL"
+            summary_type = _clean_discharge_status(raw_status)
+ 
+            template = copy.deepcopy(
+                DISCHARGE_TEMPLATES.get(summary_type, DISCHARGE_TEMPLATES['NORMAL'])
+            )
+            template['sections'] = _prefill_sections_from_db(template['sections'], admission)
+            sections = template['sections']
+ 
+            # Build a temporary (unsaved) summary object for context
             summary = DischargeSummary(
                 admission=admission,
-                summary_type=fallback_type,
-                content=copy.deepcopy(DISCHARGE_TEMPLATES.get(fallback_type, DISCHARGE_TEMPLATES["NORMAL"])),
+                summary_type=summary_type,
+                content={'sections': sections},
             )
-        
-        status_map = {"NORMAL": "pdf/normal.html", "RECOVERED": "pdf/normal.html", "LAMA": "pdf/lama.html", "REFER": "pdf/refer.html", "DOPR": "pdf/dopr.html", "DEATH": "pdf/death.html"}
-        template_file = status_map.get(summary.summary_type, "pdf/normal.html")
-        
-        patient = admission.patient
+ 
+        # Handle legacy dict format (old DB records stored sections as dict, not list)
+        if isinstance(sections, dict):
+            sections = [{'key': k, **v} for k, v in sections.items()]
+ 
+        # Always sync condition_at_discharge from the live Discharge model
         discharge = getattr(admission, 'discharge', None)
-        billing = admission.bills.order_by('-id').first()
-
-        age = "--"
+        if discharge and discharge.dischargeStatus:
+            for section in sections:
+                if section.get('key') == 'condition_at_discharge':
+                    section['value'] = discharge.dischargeStatus.upper()
+ 
+        patient = admission.patient
+ 
+        # FIX: billing is now OneToOneField with related_name='billing'
+        billing = getattr(admission, 'billing', None)
+ 
+        age = '--'
         if patient.dob:
             calc_age = (timezone.now().date() - patient.dob).days // 365
-            age = f"{calc_age} YRS"
-
-        sections = summary.content.get("sections", [])
-
-        # 🌟 NEW: BACKEND AUTO-CONVERTER 🌟
-        # If an old database record is an Object/Dict, convert it to a List format instantly!
-        if isinstance(sections, dict):
-            sections = [{"key": k, **v} for k, v in sections.items()]
-
-        # Now we can safely iterate through the list without crashing
-        if discharge:
-            for section in sections:
-                if section.get("key") == "condition_at_discharge":
-                    section["value"] = discharge.dischargeStatus.upper() if discharge.dischargeStatus else "--"
-
-        context = {
-            "s": summary, "sections": sections, "uhid": patient.uhid,
-            "ipd_no": admission.ipdNo, "patient_name": patient.patientName.upper(),
-            "guardian_name": patient.guardianName.upper() if patient.guardianName else "--",
-            "address": patient.address, "consultant": discharge.doctorName.upper() if discharge and discharge.doctorName else "--",
-            "claim_id": patient.tpaPanelCardNo if patient.tpaPanelCardNo else "--",
-            "doa": admission.dateTime.strftime("%d-%m-%Y %H:%M HRS") if admission.dateTime else "--",
-            "dod": discharge.dod.strftime("%d-%m-%Y %H:%M HRS") if (discharge and discharge.dod) else "--",
-            "bill_no": f"{billing.id}/{admission.dateTime.strftime('%y')}" if billing else "--",
-            "bill_date": discharge.dod.strftime("%d-%m-%Y %H:%M HRS") if (discharge and discharge.dod) else "--",
-            "age_sex": f"{age} / {patient.gender.upper()}", "card_no": patient.tpaCard if patient.tpaCard else "--",
-            "room": f"{discharge.roomNo} / {discharge.wardName.upper()}" if discharge and discharge.roomNo else "-- / --",
-            "panel": patient.tpa.upper() if patient.tpa else (admission.payMode.upper() if admission.payMode else 'CASH'),
-            "contact_no": patient.phone, "status_on_discharge": discharge.dischargeStatus.upper() if discharge and discharge.dischargeStatus else "--",
+            age = f'{calc_age} YRS'
+ 
+        status_map = {
+            'NORMAL':    'pdf/normal.html',
+            'RECOVERED': 'pdf/normal.html',
+            'LAMA':      'pdf/lama.html',
+            'REFER':     'pdf/refer.html',
+            'DOPR':      'pdf/dopr.html',
+            'DEATH':     'pdf/death.html',
         }
-
+        template_file = status_map.get(summary_type, 'pdf/normal.html')
+ 
+        context = {
+            's':                  summary,
+            'sections':           sections,
+            'uhid':               patient.uhid,
+            'ipd_no':             admission.ipdNo,
+            'patient_name':       patient.patientName.upper(),
+            'guardian_name':      patient.guardianName.upper() if patient.guardianName else '--',
+            'address':            patient.address,
+            'consultant':         (
+                discharge.doctorName.upper() if discharge and discharge.doctorName
+                else (
+                    getattr(getattr(admission, 'medicalHistory', None), 'treatingDoctor', '') or '--'
+                ).upper()
+            ),
+            'claim_id':           patient.tpaPanelCardNo or '--',
+            'doa':                admission.dateTime.strftime('%d-%m-%Y %H:%M HRS') if admission.dateTime else '--',
+            'dod':                discharge.dod.strftime('%d-%m-%Y %H:%M HRS') if (discharge and discharge.dod) else '--',
+            'bill_no':            f'{billing.id}/{admission.dateTime.strftime("%y")}' if billing else '--',
+            'bill_date':          discharge.dod.strftime('%d-%m-%Y %H:%M HRS') if (discharge and discharge.dod) else '--',
+            'age_sex':            f'{age} / {patient.gender.upper()}',
+            'card_no':            patient.tpaCard or '--',
+            'room':               (
+                f'{discharge.roomNo} / {discharge.wardName.upper()}'
+                if discharge and discharge.roomNo else '-- / --'
+            ),
+            'panel':              (
+                patient.tpa.upper() if patient.tpa
+                else (admission.payMode.upper() if admission.payMode else 'CASH')
+            ),
+            'contact_no':         patient.phone,
+            'status_on_discharge': discharge.dischargeStatus.upper() if (discharge and discharge.dischargeStatus) else '--',
+        }
+ 
         html_string = render_to_string(template_file, context)
         result = io.BytesIO()
-        pdf = pisa.pisaDocument(io.BytesIO(html_string.encode("UTF-8")), result)
-        
+        pdf = pisa.pisaDocument(io.BytesIO(html_string.encode('UTF-8')), result)
+ 
         if not pdf.err:
             response = HttpResponse(result.getvalue(), content_type='application/pdf')
             response['Content-Disposition'] = f'inline; filename="{uhid}_summary.pdf"'
             return response
-
-        return Response({"error": "PDF Generation Failed"}, status=400)
-
+ 
+        return Response({'error': 'PDF Generation Failed'}, status=400)
 
 def _build_patient_header_context(admission, summary_label):
     patient = admission.patient
     discharge = getattr(admission, 'discharge', None)
-    billing = admission.bills.order_by('-id').first()
+    billing = getattr(admission, 'billing', None)
 
     age = "--"
     if patient.dob:

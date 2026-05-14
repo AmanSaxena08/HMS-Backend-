@@ -83,24 +83,18 @@ class Admission(models.Model):
     # Per-admission paymode — set by receptionist at registration/re-admission time.
     # Drives billing bill_type and service pricing. Independent of Patient.payMode.
     payMode = models.CharField(max_length=20, choices=PAY_MODE_CHOICES, default='cash')
-    class Meta:
-        ordering = ['-admNo']
-        unique_together = ('patient', 'admNo')  # Ensure no duplicate admNo for same patient
-        indexes = [
-            models.Index(fields=['patient', 'admNo']),
-            models.Index(fields=['payMode']),
-        ]
     dateTime = models.DateTimeField(default=timezone.now)
     
     class Meta:
-        unique_together = ('patient', 'admNo') 
+        ordering = ['-admNo']
+        unique_together = ('patient', 'admNo')
+        indexes = [
+            models.Index(fields=['patient', 'admNo']),
+            models.Index(fields=['payMode']),
+        ] 
 
     def __str__(self):
         return f"{self.patient.uhid} - Adm #{self.admNo} ({self.ipdNo})"
-
-    @property
-    def billing(self):
-        return self.bills.order_by('-id').first()
     
     def save(self, *args, **kwargs):
         if not self.ipdNo:

@@ -304,7 +304,7 @@ class PatientSerializer(serializers.ModelSerializer):
             )
         phone = data.get('phone')
         if phone:
-            phone_query = Patient.objects.filter(phone=phone)
+            phone_query = Patient.objects.filter(phone=phone, branch_location=branch_location)
             if current_patient_id:
                 phone_query = phone_query.exclude(id=current_patient_id)
             if phone_query.exists():
@@ -313,7 +313,7 @@ class PatientSerializer(serializers.ModelSerializer):
                 )
         national_id = data.get('nationalId')
         if national_id:
-            id_query = Patient.objects.filter(nationalId=national_id)
+            id_query = Patient.objects.filter(nationalId=national_id, branch_location=branch_location)
             if current_patient_id:
                 id_query = id_query.exclude(id=current_patient_id)
             if id_query.exists():

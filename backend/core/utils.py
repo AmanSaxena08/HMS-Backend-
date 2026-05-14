@@ -235,7 +235,7 @@ def get_task_queryset_for_user(user):
             'patient__admissions__medicalHistory',
             'patient__admissions__discharge',
             'patient__admissions__services',
-            'patient__admissions__bills',
+            'patient__admissions__billing',
             'patient__admissions__lab_reports',
             'patient__admissions__pharmacy_records',
         )

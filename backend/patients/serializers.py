@@ -72,7 +72,8 @@ class MedicalHistorySerializer(serializers.ModelSerializer):
         return f"{obj.spo2} % on RA" if getattr(obj, 'spo2', None) else ""
 
     def get_pr_formatted(self, obj):
-        return f"{obj.pulse} /MINT" if getattr(obj, 'pulse', None) else ""
+        val = getattr(obj, 'pulse', None) or getattr(obj, 'pr', None)
+        return f"{val} /MIN" if val else ""
 
     def get_temp_formatted(self, obj):
         return f"{obj.temp} °F" if getattr(obj, 'temp', None) else ""
@@ -89,6 +90,15 @@ class MedicalHistorySerializer(serializers.ModelSerializer):
     def get_pa_formatted(self, obj):
         val = getattr(obj, 'pa', None) or getattr(obj, 'abd', None)
         return f"{val}" if val else ""
+    
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Always populate pulse from pr if pulse is empty (legacy data fix)
+        if not data.get('pulse') and data.get('pr'):
+            data['pulse'] = data['pr']
+        if not data.get('pr') and data.get('pulse'):
+            data['pr'] = data['pulse']
+        return data
 
 
 class DischargeSerializer(serializers.ModelSerializer):

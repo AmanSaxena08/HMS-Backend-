@@ -150,6 +150,14 @@ class MedicalHistory(models.Model):
     alcoholUse = models.CharField(max_length=50, blank=True)
     notes = models.TextField(blank=True)
 
+    def save(self, *args, **kwargs):
+    # Keep pulse and pr in sync — frontend may send either field name
+        if self.pr and not self.pulse:
+            self.pulse = self.pr
+        elif self.pulse and not self.pr:
+            self.pr = self.pulse
+        super().save(*args, **kwargs)
+
 class Discharge(models.Model):
     admission = models.OneToOneField(Admission, related_name='discharge', on_delete=models.CASCADE)
 

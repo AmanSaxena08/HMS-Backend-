@@ -371,96 +371,91 @@ class PatientViewSet(viewsets.ModelViewSet):
             logger.exception('set_expected_dod failed. uhid=%s', uhid)
             raise
 
-    # ── Request print ──────────────────────────────────────────────────────────
-
-        @action(detail=True, methods=['post'])
-        def request_print(self, request, uhid=None):
-            patient     = self.get_object()
-            raw_adm_no  = (
-                request.data.get('admNo') or request.data.get('adm_no') or
-                request.query_params.get('admNo') or request.query_params.get('adm_no')
-            )
-    
-            try:
-                if raw_adm_no in (None, ''):
-                    admission = patient.admissions.order_by('-admNo').first()
-                    if not admission:
-                        return Response({'error': 'No admission found.'}, status=status.HTTP_400_BAD_REQUEST)
-                else:
-                    admission = _get_admission_strict(patient, _safe_adm_no(raw_adm_no))
-    
-                # FIX: Cashless patients do NOT go through the print approval flow.
-                # Only CASH admissions need Branch Admin approval before printing.
-                if admission.payMode.lower() == 'cashless':
-                    return Response(
-                        {'error': 'Print approval is only required for cash patients. Cashless bills are managed by the office.'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-    
-                billing_obj, _ = get_or_create_current_billing(admission)
-                if billing_obj.printStatus == 'APPROVED':
-                    return Response({'status': 'Already approved'})
-    
-                billing_obj.printStatus      = 'PENDING'
-                billing_obj.printRequestedAt = timezone.now()
-                billing_obj.save()
-                return Response({'status': 'Print request sent to Branch Admin', 'admNo': admission.admNo})
-    
-            except ValidationError:
-                raise
-            except Exception:
-                logger.exception('request_print failed. uhid=%s', uhid)
-                raise
-
+    @action(detail=True, methods=['post'])
+    def request_print(self, request, uhid=None):
+        patient     = self.get_object()
+        raw_adm_no  = (
+            request.data.get('admNo') or request.data.get('adm_no') or
+            request.query_params.get('admNo') or request.query_params.get('adm_no')
+        )
+ 
+        try:
+            if raw_adm_no in (None, ''):
+                admission = patient.admissions.order_by('-admNo').first()
+                if not admission:
+                    return Response({'error': 'No admission found.'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                admission = _get_admission_strict(patient, _safe_adm_no(raw_adm_no))
+ 
+            if admission.payMode.lower() == 'cashless':
+                return Response(
+                    {'error': 'Print approval is only required for cash patients.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+ 
+            billing_obj, _ = get_or_create_current_billing(admission)
+            if billing_obj.printStatus == 'APPROVED':
+                return Response({'status': 'Already approved'})
+ 
+            billing_obj.printStatus      = 'PENDING'
+            billing_obj.printRequestedAt = timezone.now()
+            billing_obj.save()
+            return Response({'status': 'Print request sent to Branch Admin', 'admNo': admission.admNo})
+ 
+        except ValidationError:
+            raise
+        except Exception:
+            logger.exception('request_print failed. uhid=%s', uhid)
+            raise
+ 
     # ── Resolve print (admin approval) ────────────────────────────────────────
-
-        @action(detail=True, methods=['post'])
-        def resolve_print(self, request, uhid=None):
-            role = getattr(request.user, 'role', '')
-            if role not in ('superadmin', 'office_admin', 'admin', 'branchadmin'):
-                return Response({'error': 'Only Branch Admin / Super Admin can approve print requests.'}, status=status.HTTP_403_FORBIDDEN)
-    
-            patient    = self.get_object()
-            raw_adm_no = (
-                request.data.get('admNo') or request.data.get('adm_no') or
-                request.query_params.get('admNo') or request.query_params.get('adm_no')
-            )
-            action_val = str(
-                request.data.get('action') or request.data.get('status') or request.data.get('backendAction') or 'APPROVED'
-            ).upper()
-            if action_val not in {'APPROVED', 'REJECTED', 'PENDING'}:
-                action_val = 'APPROVED'
-    
-            try:
-                if role in ('admin', 'branchadmin') and getattr(request.user, 'branch', None):
-                    if patient.branch_location != request.user.branch:
-                        return Response({'error': 'You can only resolve print requests for your own branch.'}, status=status.HTTP_403_FORBIDDEN)
-    
-                if raw_adm_no in (None, ''):
-                    admission = patient.admissions.order_by('-admNo').first()
-                    if not admission:
-                        return Response({'error': 'No admission found.'}, status=status.HTTP_400_BAD_REQUEST)
-                else:
-                    admission = _get_admission_strict(patient, _safe_adm_no(raw_adm_no))
-    
-                # FIX: Block approval for cashless patients — they don't use this flow.
-                if admission.payMode.lower() == 'cashless':
-                    return Response(
-                        {'error': 'Cashless patients do not use the print approval flow.'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-    
-                billing_obj, _ = get_or_create_current_billing(admission)
-                billing_obj.printStatus = action_val
-                billing_obj.save()
-                return Response({'status': f'Print request {action_val}'})
-    
-            except ValidationError:
-                raise
-            except Exception:
-                logger.exception('resolve_print failed. uhid=%s', uhid)
-                raise
-
+ 
+    @action(detail=True, methods=['post'])
+    def resolve_print(self, request, uhid=None):
+        role = getattr(request.user, 'role', '')
+        if role not in ('superadmin', 'office_admin', 'admin', 'branchadmin'):
+            return Response({'error': 'Only Branch Admin / Super Admin can approve print requests.'}, status=status.HTTP_403_FORBIDDEN)
+ 
+        patient    = self.get_object()
+        raw_adm_no = (
+            request.data.get('admNo') or request.data.get('adm_no') or
+            request.query_params.get('admNo') or request.query_params.get('adm_no')
+        )
+        action_val = str(
+            request.data.get('action') or request.data.get('status') or request.data.get('backendAction') or 'APPROVED'
+        ).upper()
+        if action_val not in {'APPROVED', 'REJECTED', 'PENDING'}:
+            action_val = 'APPROVED'
+ 
+        try:
+            if role in ('admin', 'branchadmin') and getattr(request.user, 'branch', None):
+                if patient.branch_location != request.user.branch:
+                    return Response({'error': 'You can only resolve print requests for your own branch.'}, status=status.HTTP_403_FORBIDDEN)
+ 
+            if raw_adm_no in (None, ''):
+                admission = patient.admissions.order_by('-admNo').first()
+                if not admission:
+                    return Response({'error': 'No admission found.'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                admission = _get_admission_strict(patient, _safe_adm_no(raw_adm_no))
+ 
+            if admission.payMode.lower() == 'cashless':
+                return Response(
+                    {'error': 'Cashless patients do not use the print approval flow.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+ 
+            billing_obj, _ = get_or_create_current_billing(admission)
+            billing_obj.printStatus = action_val
+            billing_obj.save()
+            return Response({'status': f'Print request {action_val}'})
+ 
+        except ValidationError:
+            raise
+        except Exception:
+            logger.exception('resolve_print failed. uhid=%s', uhid)
+            raise
+        
     # ── Pending prints list ────────────────────────────────────────────────────
 
     @action(detail=False, methods=['get'])

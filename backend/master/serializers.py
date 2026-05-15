@@ -9,7 +9,7 @@ class ServiceMasterSerializer(serializers.ModelSerializer):
 class DoctorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Doctor
-        fields = '__all__'
+        fields = ['id', 'name', 'qualification', 'branch', 'created_at']
 
 class MedicineMasterSerializer(serializers.ModelSerializer):
     class Meta:

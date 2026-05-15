@@ -39,6 +39,10 @@ class MedicineMaster(models.Model):
 class Doctor(models.Model):
     name = models.CharField(max_length=255)
     qualification = models.CharField(max_length=255, blank=True)
+    branch = models.CharField(
+        max_length=10, blank=True, null=True,
+        help_text="Leave blank for doctors visible in all branches."
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

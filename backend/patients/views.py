@@ -19,7 +19,7 @@ from core.utils import (
     resolve_service_defaults,
     resolve_branch_code_from_loc,
     get_valid_branch_codes,
-    DEPARTMENT_ROLE_MAP,          # Single source of truth — defined in core/utils
+    DEPARTMENT_ROLE_MAP,         
 )
 from .models import Patient, Admission, MedicalHistory, Discharge, Service, Billing
 from .serializers import (
@@ -179,26 +179,72 @@ class PatientViewSet(viewsets.ModelViewSet):
         patient        = get_object_or_404(Patient, uhid=uhid)
         admission_type = request.data.get('admissionType') or 'IPD'
         adm_pay_mode   = _clean_pay_mode(request.data.get('payMode'))
-
+ 
+        # Also collect cashless details if provided
+        cashless_type   = str(request.data.get('cashlessType') or '').strip()
+        tpa             = str(request.data.get('tpa') or '').strip()
+        tpa_card        = str(request.data.get('tpaCard') or '').strip()
+        tpa_validity    = request.data.get('tpaValidity') or None
+        tpa_card_type   = str(request.data.get('tpaCardType') or '').strip()
+        tpa_panel_no    = str(request.data.get('tpaPanelCardNo') or '').strip()
+        tpa_panel_val   = request.data.get('tpaPanelValidity') or None
+ 
         try:
             with transaction.atomic():
                 # Lock patient row — prevents race condition on admNo generation
                 patient    = Patient.objects.select_for_update().get(pk=patient.pk)
                 last_adm   = Admission.objects.filter(patient=patient).order_by('-admNo').first()
                 new_adm_no = (last_adm.admNo + 1) if last_adm else 1
-
+ 
                 admission = Admission.objects.create(
                     patient=patient,
                     admNo=new_adm_no,
                     admissionType=admission_type,
                     payMode=adm_pay_mode,
                 )
+ 
+                # registration payMode regardless of how many admissions are created.
+                update_fields = ['payMode']
+                patient.payMode = adm_pay_mode
+ 
+                # Also update cashless TPA details on the patient if switching to cashless
+                if adm_pay_mode == 'cashless':
+                    if cashless_type:
+                        patient.cashlessType = cashless_type
+                        update_fields.append('cashlessType')
+                    if tpa:
+                        patient.tpa = tpa
+                        update_fields.append('tpa')
+                    if tpa_card:
+                        patient.tpaCard = tpa_card
+                        update_fields.append('tpaCard')
+                    if tpa_validity:
+                        patient.tpaValidity = tpa_validity
+                        update_fields.append('tpaValidity')
+                    if tpa_card_type:
+                        patient.tpaCardType = tpa_card_type
+                        update_fields.append('tpaCardType')
+                    if tpa_panel_no:
+                        patient.tpaPanelCardNo = tpa_panel_no
+                        update_fields.append('tpaPanelCardNo')
+                    if tpa_panel_val:
+                        patient.tpaPanelValidity = tpa_panel_val
+                        update_fields.append('tpaPanelValidity')
+                else:
+                    # Switching back to cash — clear cashless fields
+                    patient.cashlessType = ''
+                    patient.tpa = ''
+                    patient.tpaCard = ''
+                    update_fields += ['cashlessType', 'tpa', 'tpaCard']
+ 
+                patient.save(update_fields=update_fields)
+ 
                 # Seed billing immediately so payMode is locked in from the start
                 get_or_create_current_billing(admission)
-
+ 
             serializer = self.get_serializer(patient)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
-
+ 
         except Exception:
             logger.exception('New admission failed. uhid=%s', uhid)
             raise

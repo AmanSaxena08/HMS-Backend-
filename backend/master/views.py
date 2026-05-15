@@ -266,16 +266,46 @@ class MedicineMasterImportAPIView(APIView):
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
-    queryset = Doctor.objects.all().order_by('name')
     serializer_class = DoctorSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = None
 
+    def get_queryset(self):
+        user = self.request.user
+        branch = getattr(user, 'branch', None)
+        role = getattr(user, 'role', '')
+
+        # Superadmin sees all doctors from all branches
+        if role == 'superadmin':
+            return Doctor.objects.all().order_by('name')
+
+        # Branch admin and receptionist see only their branch + global doctors
+        if role in ('admin', 'receptionist') and branch:
+            return Doctor.objects.filter(
+                Q(branch=branch) | Q(branch__isnull=True) | Q(branch='')
+            ).order_by('name')
+
+        # Office admin, HOD, billing etc. — no doctor list needed
+        return Doctor.objects.none()
+
     def check_permissions(self, request):
         super().check_permissions(request)
         if request.method not in ['GET', 'HEAD', 'OPTIONS']:
-            if getattr(request.user, 'role', '') not in ['superadmin', 'admin', 'office_admin']:
-                self.permission_denied(request, message="Only Admins can manage the doctors list.")
+            role = getattr(request.user, 'role', '')
+            if role not in ('superadmin', 'admin'):
+                self.permission_denied(
+                    request,
+                    message="Only Super Admin and Branch Admin can manage doctors."
+                )
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        # Branch admin: force doctor into their branch
+        if user.role == 'admin':
+            serializer.save(branch=user.branch)
+        else:
+            # Superadmin: can set any branch or leave global (null)
+            serializer.save()
 
 
 class AdminDashboardStatsAPIView(APIView):

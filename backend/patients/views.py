@@ -73,6 +73,7 @@ def _get_admission_strict(patient, adm_no):
 # ── PatientViewSet ─────────────────────────────────────────────────────────────
 
 class PatientViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
     pagination_class = StandardPagination
     queryset         = Patient.objects.all().order_by('-created_at')
     serializer_class = PatientSerializer
@@ -110,7 +111,7 @@ class PatientViewSet(viewsets.ModelViewSet):
             cashless_adm = Admission.objects.filter(patient=OuterRef('pk'), payMode='cashless')
             return qs.filter(Exists(cashless_adm)).order_by('-created_at')
 
-        elif role in ('admin', 'receptionist'):
+        elif role in ('admin', 'branchadmin', 'receptionist'):
             # Branch-scoped: all patients (cash + cashless) for their branch only
             return qs.filter(branch_location=user.branch).order_by('-created_at')
 

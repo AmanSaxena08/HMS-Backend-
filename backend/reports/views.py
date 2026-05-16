@@ -12,6 +12,7 @@ from rest_framework import generics, viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from xhtml2pdf import pisa
 from patients.models import Patient, Admission, MedicalHistory, Discharge, Billing
 from master.models import HospitalSettings, MedicineMaster
@@ -20,6 +21,7 @@ from .models import LabReport, DischargeSummary, PharmacyRecord, ReportMaster
 from .serializers import LabReportSerializer, DischargeSummarySerializer, PharmacyRecordSerializer, ReportMasterSerializer
 from .templates import DISCHARGE_TEMPLATES
 from .report_templates import build_suggested_reports_for_admission, build_report_from_template, get_template_by_label
+from tasks.models import Task
 
 # Create your views here.
 
@@ -147,6 +149,22 @@ class LabReportListCreateView(generics.ListCreateAPIView):
         adm_no = self.kwargs.get('adm_no')
         
         patient = get_object_or_404(Patient, uhid=uhid)
+
+        user = self.request.user
+        if user.role not in ['superadmin', 'office_admin', 'hod']:
+            if user.role == 'admin':
+                if patient.branch_location != user.branch:
+                    raise PermissionDenied("You are not authorized to modify reports for this patient.")
+            elif user.role == 'receptionist':
+                raise PermissionDenied("Receptionists cannot fill lab reports.")
+            else:
+                is_assigned = Task.objects.filter(
+                    patient=patient, 
+                    assigned_to=user
+                ).exists()
+                if not is_assigned:
+                    raise PermissionDenied("You are not authorized to modify reports for this patient.")
+
         admission = get_object_or_404(Admission, patient=patient, admNo=adm_no)
 
         lookup = {
@@ -168,6 +186,22 @@ class LabReportBulkSaveAPIView(APIView):
 
     def post(self, request, uhid, adm_no):
         patient = get_object_or_404(Patient, uhid=uhid)
+
+        user = request.user
+        if user.role not in ['superadmin', 'office_admin', 'hod']:
+            if user.role == 'admin':
+                if patient.branch_location != user.branch:
+                    return Response({'error': 'You are not authorized to modify reports for this patient.'}, status=status.HTTP_403_FORBIDDEN)
+            elif user.role == 'receptionist':
+                return Response({'error': 'Receptionists cannot fill lab reports.'}, status=status.HTTP_403_FORBIDDEN)
+            else:
+                is_assigned = Task.objects.filter(
+                    patient=patient, 
+                    assigned_to=user
+                ).exists()
+                if not is_assigned:
+                    return Response({'error': 'You are not authorized to modify reports for this patient.'}, status=status.HTTP_403_FORBIDDEN)
+
         admission = get_object_or_404(Admission, patient=patient, admNo=adm_no)
         reports = request.data.get('reports') or []
 
@@ -178,6 +212,29 @@ class LabReportBulkSaveAPIView(APIView):
             LabReport.objects.filter(patient=patient, admission=admission).delete()
 
             for report in reports:
+                # ── Ghost Prevention: Do not save completely empty templates ──
+                has_data = False
+                
+                if str(report.get('remarks', '')).strip():
+                    has_data = True
+                if str(report.get('findings', '')).strip() or str(report.get('impression', '')).strip():
+                    has_data = True
+                    
+                md = report.get('modality_details', {})
+                if isinstance(md, dict) and (str(md.get('findings', '')).strip() or str(md.get('impression', '')).strip()):
+                    has_data = True
+                
+                tests = report.get('tests', []) or report.get('table_data', [])
+                if isinstance(tests, list):
+                    for t in tests:
+                        val = str(t.get('value', '')).strip()
+                        if val and val not in ('-', 'N/A', 'None'):
+                            has_data = True
+                            break
+                            
+                if not has_data:
+                    continue
+
                 serializer = LabReportSerializer(data=report)
                 serializer.is_valid(raise_exception=True)
                 created_reports.append(LabReport(
@@ -214,9 +271,30 @@ class LabReportTemplateSuggestionsAPIView(APIView):
         # Build them from the saved LabReport rows (real data, already filled).
         saved_report_names = set()
         for lab in admission.lab_reports.all().order_by('id'):
-            saved_report_names.add(lab.report_name.strip().casefold())
             # Try to merge with a rich template for consistent structure
             template = get_template_by_label(lab.report_name)
+            md = lab.modality_details if isinstance(lab.modality_details, dict) else {}
+            
+            # ── Check if this saved report actually has data (Ghost Prevention) ──
+            has_data = False
+            if lab.remarks and str(lab.remarks).strip():
+                has_data = True
+            elif md.get('findings', '').strip() or md.get('impression', '').strip():
+                has_data = True
+            else:
+                tests = lab.table_data if isinstance(lab.table_data, list) else []
+                for test in tests:
+                    val = str(test.get('value', '')).strip()
+                    if val and val not in ('-', 'N/A', 'None'):
+                        has_data = True
+                        break
+            
+            if not has_data:
+                # Skip empty ghost reports! (They will be picked up fresh as unsaved if recommended)
+                continue
+
+            saved_report_names.add(lab.report_name.strip().casefold())
+
             if template:
                 report = build_report_from_template(
                     template, patient=patient, admission=admission, ordered_by=ordered_by
@@ -225,8 +303,10 @@ class LabReportTemplateSuggestionsAPIView(APIView):
                 report['id']          = lab.id
                 report['amount']      = lab.amount or 0
                 report['remarks']     = lab.remarks or ''
-                report['findings']    = lab.findings or ''
-                report['impression']  = lab.impression or ''
+                report['findings']    = md.get('findings', '')
+                report['impression']  = md.get('impression', '')
+                if isinstance(lab.table_data, list) and lab.table_data:
+                    report['tests']   = lab.table_data
                 report['is_saved']    = True
                 report['is_recommended'] = True
             else:
@@ -235,15 +315,15 @@ class LabReportTemplateSuggestionsAPIView(APIView):
                     'id':             lab.id,
                     'reportName':     lab.report_name,
                     'reportType':     lab.report_type or 'Custom',
-                    'reportCategory': lab.report_category or 'CUSTOM',
-                    'billCategory':   lab.bill_category or 'PATHOLOGY',
+                    'reportCategory': getattr(lab, 'report_category', 'CUSTOM') or 'CUSTOM',
+                    'billCategory':   getattr(lab, 'bill_category', 'PATHOLOGY') or 'PATHOLOGY',
                     'date':           lab.report_date.isoformat() if lab.report_date else timezone.localdate().isoformat(),
                     'orderedBy':      lab.ordered_by or ordered_by or '',
                     'amount':         lab.amount or 0,
                     'remarks':        lab.remarks or '',
-                    'findings':       lab.findings or '',
-                    'impression':     lab.impression or '',
-                    'tests':          lab.tests or [],
+                    'findings':       md.get('findings', ''),
+                    'impression':     md.get('impression', ''),
+                    'tests':          lab.table_data if isinstance(lab.table_data, list) else [],
                     'patientUhid':    patient.uhid,
                     'patientName':    patient.patientName,
                     'admNo':          admission.admNo,
@@ -252,24 +332,42 @@ class LabReportTemplateSuggestionsAPIView(APIView):
                 }
             results.append(report)
  
-        # ── Step 2: ReportMaster formats not yet saved for this admission ─────
-        # Show the admin-configured report formats (your 3) as empty templates
-        # so billing/office can fill them in. Skip any already saved above.
-        for master_report in ReportMaster.objects.all().order_by('name'):
-            name_key = master_report.name.strip().casefold()
-            if name_key in saved_report_names:
-                # Already in the list from Step 1 — don't duplicate
-                continue
- 
-            template = get_template_by_label(master_report.name)
+        # ── Step 2: Unsaved suggested reports from Medical History & Services ─
+        def _split_text(raw):
+            if not raw:
+                return []
+            parts = []
+            for chunk in str(raw).replace('\r', '\n').split('\n'):
+                for piece in chunk.replace('|', ',').replace(';', ',').split(','):
+                    cleaned = piece.strip()
+                    if cleaned:
+                        parts.append(cleaned)
+            return parts
+
+        suggested_names = []
+        if medical_history and medical_history.investigations:
+            for token in _split_text(medical_history.investigations):
+                if token.casefold() not in saved_report_names:
+                    suggested_names.append(token)
+                    saved_report_names.add(token.casefold())
+
+        for svc in admission.services.all():
+            cat_lower = (svc.svcCat or '').lower()
+            if any(key in cat_lower for key in ('pathology', 'radiology', 'lab', 'test', 'scan', 'x-ray', 'xray', 'ultrasound', 'mri', 'ct scan')):
+                svc_name = svc.svcName.strip()
+                if svc_name and svc_name.casefold() not in saved_report_names:
+                    suggested_names.append(svc_name)
+                    saved_report_names.add(svc_name.casefold())
+
+        for name in suggested_names:
+            template = get_template_by_label(name)
             if template:
                 report = build_report_from_template(
                     template, patient=patient, admission=admission, ordered_by=ordered_by
                 )
             else:
                 report = {
-                    'id':             f'master-{master_report.id}',
-                    'reportName':     master_report.name,
+                    'reportName':     name,
                     'reportType':     'Custom',
                     'reportCategory': 'CUSTOM',
                     'billCategory':   'PATHOLOGY',
@@ -284,10 +382,11 @@ class LabReportTemplateSuggestionsAPIView(APIView):
                     'patientName':    patient.patientName,
                     'admNo':          admission.admNo,
                 }
-            report['is_saved']       = False
-            report['is_recommended'] = False
+            
+            report['is_saved'] = False
+            report['is_recommended'] = True
             results.append(report)
- 
+
         return Response(
             {
                 'patient':           patient.uhid,
@@ -296,7 +395,6 @@ class LabReportTemplateSuggestionsAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
- 
  
     
 class DynamicDischargeSummaryView(APIView):

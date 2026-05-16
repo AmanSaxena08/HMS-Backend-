@@ -151,19 +151,19 @@ class LabReportListCreateView(generics.ListCreateAPIView):
         patient = get_object_or_404(Patient, uhid=uhid)
 
         user = self.request.user
-        if user.role not in ['superadmin', 'office_admin', 'hod']:
-            if user.role == 'admin':
-                if patient.branch_location != user.branch:
-                    raise PermissionDenied("You are not authorized to modify reports for this patient.")
-            elif user.role == 'receptionist':
-                raise PermissionDenied("Receptionists cannot fill lab reports.")
-            else:
-                is_assigned = Task.objects.filter(
-                    patient=patient, 
-                    assigned_to=user
-                ).exists()
-                if not is_assigned:
-                    raise PermissionDenied("You are not authorized to modify reports for this patient.")
+        if user.role == 'admin':
+            if patient.branch_location != user.branch:
+                raise PermissionDenied("You are not authorized to modify reports for this patient.")
+        elif user.role == 'receptionist':
+            if patient.branch_location != getattr(user, 'branch', None):
+                raise PermissionDenied("You can only add reports for patients in your branch.")
+        elif user.role not in ['superadmin', 'office_admin', 'hod']:
+            is_assigned = Task.objects.filter(
+                patient=patient,
+                assigned_to=user
+            ).exists()
+            if not is_assigned:
+                raise PermissionDenied("You are not authorized to modify reports for this patient.")
 
         admission = get_object_or_404(Admission, patient=patient, admNo=adm_no)
 
@@ -188,19 +188,19 @@ class LabReportBulkSaveAPIView(APIView):
         patient = get_object_or_404(Patient, uhid=uhid)
 
         user = request.user
-        if user.role not in ['superadmin', 'office_admin', 'hod']:
-            if user.role == 'admin':
-                if patient.branch_location != user.branch:
-                    return Response({'error': 'You are not authorized to modify reports for this patient.'}, status=status.HTTP_403_FORBIDDEN)
-            elif user.role == 'receptionist':
-                return Response({'error': 'Receptionists cannot fill lab reports.'}, status=status.HTTP_403_FORBIDDEN)
-            else:
-                is_assigned = Task.objects.filter(
-                    patient=patient, 
-                    assigned_to=user
-                ).exists()
-                if not is_assigned:
-                    return Response({'error': 'You are not authorized to modify reports for this patient.'}, status=status.HTTP_403_FORBIDDEN)
+        if user.role == 'admin':
+            if patient.branch_location != user.branch:
+                return Response({'error': 'You are not authorized to modify reports for this patient.'}, status=status.HTTP_403_FORBIDDEN)
+        elif user.role == 'receptionist':
+            if patient.branch_location != getattr(user, 'branch', None):
+                return Response({'error': 'You can only add reports for patients in your branch.'}, status=status.HTTP_403_FORBIDDEN)
+        elif user.role not in ['superadmin', 'office_admin', 'hod']:
+            is_assigned = Task.objects.filter(
+                patient=patient,
+                assigned_to=user
+            ).exists()
+            if not is_assigned:
+                return Response({'error': 'You are not authorized to modify reports for this patient.'}, status=status.HTTP_403_FORBIDDEN)
 
         admission = get_object_or_404(Admission, patient=patient, admNo=adm_no)
         reports = request.data.get('reports') or []

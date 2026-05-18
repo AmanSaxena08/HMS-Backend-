@@ -18,6 +18,17 @@ from rest_framework.decorators import api_view, permission_classes
 from master.models import HospitalSettings
 
 
+from rest_framework.throttling import AnonRateThrottle
+ 
+class LoginRateThrottle(AnonRateThrottle):
+    scope = 'login'
+ 
+class OTPRequestThrottle(AnonRateThrottle):
+    scope = 'otp_request'
+ 
+class OTPVerifyThrottle(AnonRateThrottle):
+    scope = 'otp_verify'
+
 
 CENTRAL_STAFF_ROLES = {
     'billing', 'hod', 'opd', 'intimation', 'query',
@@ -145,10 +156,11 @@ def enforce_user_hierarchy(actor, payload, instance=None):
 
 class CustomLoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    throttle_classes = [LoginRateThrottle]
 
 class UserListCreateView(generics.ListCreateAPIView):
     serializer_class = UserManagementSerializer
-    permission_classes = [IsBranchAdminOrSuperAdmin]
+    permission_classes = [IsBranchAdminOrSuperAdmin]    
 
     def get_queryset(self):
         requested_branch = str(self.request.query_params.get('branch') or '').strip().upper()
@@ -209,92 +221,101 @@ class AdminResetPasswordView(generics.UpdateAPIView):
                         status=status.HTTP_200_OK)
     
 class RequestPasswordResetOTPView(APIView):
-    permission_classes = [AllowAny] 
-
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPRequestThrottle]   # ADD THIS
+ 
     def post(self, request):
-        email = request.data.get('email')
-
+        email = request.data.get('email', '').strip().lower()
+ 
+        # FIX: Always return 200 regardless of whether email exists.
+        # This prevents email enumeration — attacker cannot tell if
+        # an email is registered by comparing 404 vs 200 responses.
+        GENERIC_RESPONSE = Response(
+            {"message": "If this email is registered, you will receive an OTP shortly."},
+            status=status.HTTP_200_OK
+        )
+ 
+        if not email:
+            return GENERIC_RESPONSE
+ 
         try:
             user = CustomUser.objects.get(email=email)
         except CustomUser.DoesNotExist:
-            return Response(
-                {"error": "This email is not registered in our system."}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        # 1. Generate a random 6-digit OTP
+            # Return same 200 response — don't reveal email doesn't exist
+            return GENERIC_RESPONSE
+ 
         otp_code = str(random.randint(100000, 999999))
-
-        # 2. Invalidate any old unused OTPs
         PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
-
-        # 3. Save the new OTP to the database
-        PasswordResetOTP.objects.create(user=user, otp=otp_code)                    
-
-        # 4. 🌟 THE FIX: Updated Email Text Formatting
+        PasswordResetOTP.objects.create(user=user, otp=otp_code)
+ 
         subject = "Sangi Hospital - Password Reset OTP"
-        message = f"Hello {user.first_name or user.username},\n\nYour password reset code is: {otp_code}\n\nThis code will expire in 10 minutes.\nIf you did not request this, please ignore this email."
-        
-        try:
-            send_mail(
-                subject,
-                message,
-                settings.DEFAULT_FROM_EMAIL,
-                [user.email],
-                fail_silently=False,
-            )
-        except Exception as e:
-            return Response(
-                {"error": "Failed to send email. Check your Gmail configuration."}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        return Response(
-            {"message": "OTP has been sent successfully."}, 
-            status=status.HTTP_200_OK
+        message = (
+            f"Hello {user.first_name or user.username},\n\n"
+            f"Your password reset code is: {otp_code}\n\n"
+            f"This code will expire in 10 minutes.\n"
+            f"If you did not request this, please ignore this email."
         )
+ 
+        try:
+            send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
+        except Exception:
+            pass  # Don't reveal email failure to caller
+ 
+        return GENERIC_RESPONSE
+ 
     
 class VerifyPasswordResetOTPView(APIView):
-    permission_classes = [AllowAny] 
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPVerifyThrottle]
 
     def post(self, request):
-        # 🌟 THE FIX: Directly extract data and strip spaces to prevent copy-paste errors
-        email = request.data.get('email')
-        otp_code = str(request.data.get('otp', '')).strip()
+        email        = request.data.get('email', '').strip().lower()
+        otp_code     = str(request.data.get('otp', '')).strip()
         new_password = request.data.get('new_password')
 
         if not email or not otp_code or not new_password:
-            return Response({"error": "Please provide your email, OTP, and a new password."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Please provide your email, OTP, and a new password."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 1. Find the user
         try:
             user = CustomUser.objects.get(email=email)
         except CustomUser.DoesNotExist:
-            return Response({"error": "Invalid request. Email not found."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Invalid OTP or email."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except CustomUser.MultipleObjectsReturned:
             user = CustomUser.objects.filter(email=email).first()
 
-        # 2. Find the active OTP for this user
         try:
-            otp_record = PasswordResetOTP.objects.get(user=user, otp=otp_code, is_used=False)
+            otp_record = PasswordResetOTP.objects.get(
+                user=user, otp=otp_code, is_used=False
+            )
         except PasswordResetOTP.DoesNotExist:
-            return Response({"error": "Invalid or already used OTP. Please check the code and try again."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Invalid or expired OTP. Please check the code or request a new one."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 3. Check if the 10-minute timer expired
         if hasattr(otp_record, 'is_valid') and not otp_record.is_valid():
-            return Response({"error": "OTP has expired. Please request a new one."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "OTP has expired. Please request a new one."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 4. Success! Change the password and burn the OTP
         user.set_password(new_password)
         user.save()
-
         otp_record.is_used = True
         otp_record.save()
 
         return Response(
-            {"message": "Password successfully reset. You can now log in with your new password."}, 
+            {"message": "Password successfully reset. You can now log in with your new password."},
             status=status.HTTP_200_OK
         )
+ 
+ 
 
 
 class SelfProfileView(generics.RetrieveUpdateAPIView):

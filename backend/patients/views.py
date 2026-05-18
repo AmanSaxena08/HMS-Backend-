@@ -1,5 +1,6 @@
 import logging
 from decimal import Decimal, InvalidOperation
+import time
 
 from django.db import transaction, models
 from django.db.models import Exists, OuterRef
@@ -140,38 +141,53 @@ class PatientViewSet(viewsets.ModelViewSet):
         admission_type = data.pop('admissionType', None) or 'IPD'
         adm_pay_mode   = _clean_pay_mode(data.get('payMode'))
 
-        # Auto-fill branch from the logged-in receptionist/admin if not sent
-        if not data.get('branch_location') and not data.get('locId'):
-            if getattr(request.user, 'branch', None) not in (None, 'ALL'):
-                data['branch_location'] = request.user.branch
-
-        if 'locId' in data or 'branch_location' in data:
-            data['branch_location'] = resolve_branch_code_from_loc(
-                data.get('locId'), data.get('branch_location')
-            )
+        role   = getattr(request.user, 'role', '')
+        branch = getattr(request.user, 'branch', None)
+ 
+        if role in ('receptionist', 'admin'):
+            # FIX: Force branch from logged-in user — cannot be overridden by request data.
+            # A receptionist at LNM branch cannot register a patient in RYA branch
+            # by sending branch_location=RYA in the request body.
+            data['branch_location'] = branch
+        else:
+            # Superadmin / office_admin: allowed to specify branch freely
+            if not data.get('branch_location') and not data.get('locId'):
+                if branch not in (None, 'ALL'):
+                    data['branch_location'] = branch
+            if 'locId' in data or 'branch_location' in data:
+                data['branch_location'] = resolve_branch_code_from_loc(
+                    data.get('locId'), data.get('branch_location')
+                )
 
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            with transaction.atomic():
-                # Patient + first Admission created together.
-                # If admission creation fails, patient is rolled back.
-                self.perform_create(serializer)
-                patient = serializer.instance
-                Admission.objects.create(
-                    patient=patient,
-                    admNo=1,
-                    admissionType=admission_type,
-                    payMode=adm_pay_mode,
-                )
-            response_serializer = self.get_serializer(patient)
-            headers = self.get_success_headers(response_serializer.data)
-            return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        last_exc = None
+        for attempt in range(3):
+            try:
+                with transaction.atomic():
+                    self.perform_create(serializer)
+                    patient = serializer.instance
+                    Admission.objects.create(
+                        patient=patient,
+                        admNo=1,
+                        admissionType=admission_type,
+                        payMode=adm_pay_mode,
+                    )
+                response_serializer = self.get_serializer(patient)
+                headers = self.get_success_headers(response_serializer.data)
+                return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-        except Exception:
-            logger.exception('Patient creation failed. data=%s', dict(data))
-            raise
+            except Exception as e:
+                if 'uhid' in str(e).lower() and attempt < 2:
+                    last_exc = e
+                    time.sleep(0.05)
+                    continue
+                logger.exception('Patient creation failed. data=%s', dict(data))
+                raise
+
+        logger.exception('Patient creation failed after 3 retries. data=%s', dict(data))
+        raise last_exc
 
     # ── New admission ──────────────────────────────────────────────────────────
 
